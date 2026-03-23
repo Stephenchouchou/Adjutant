@@ -89,8 +89,7 @@ function handleMessage(msg) {
             updateButtons();
             setAvatar("idle");
             setIndicator("");
-            if (currentContent) currentContent.classList.remove("streaming");
-            currentContent = null;
+            finishEntry();
             setStatus("AWAITING ORDERS", "online");
             setModulesDisabled(false);
             break;
@@ -130,10 +129,9 @@ function handleMessage(msg) {
             setAvatar("idle");
             setIndicator("");
             if (currentContent) {
-                currentContent.classList.remove("streaming");
                 currentContent.textContent += "\n\n[TRANSMISSION ABORTED]";
             }
-            currentContent = null;
+            finishEntry();
             setStatus("AWAITING ORDERS", "online");
             setModulesDisabled(false);
             break;
@@ -177,7 +175,7 @@ function clearWelcome() {
     if (w) w.remove();
 }
 
-function addMessage(role, text, imagePaths) {
+function addMessage(role, text, imagePaths, render) {
     clearWelcome();
 
     const isCmd = role === "user";
@@ -215,7 +213,11 @@ function addMessage(role, text, imagePaths) {
 
     const body = document.createElement("div");
     body.className = "msg-body";
-    body.textContent = text;
+    if (render) {
+        body.innerHTML = renderMarkdown(text);
+    } else {
+        body.textContent = text;
+    }
 
     msg.appendChild(body);
     feed.appendChild(msg);
@@ -272,6 +274,73 @@ function escapeHtml(str) {
     const d = document.createElement("div");
     d.textContent = str;
     return d.innerHTML;
+}
+
+function finishEntry() {
+    if (currentContent) {
+        currentContent.classList.remove("streaming");
+        const raw = currentContent.textContent;
+        currentContent.innerHTML = renderMarkdown(raw);
+    }
+    currentContent = null;
+}
+
+function renderMarkdown(text) {
+    let html = escapeHtml(text);
+
+    // Code blocks (``` ... ```)
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
+        return `<pre class="md-code"><code>${code.trim()}</code></pre>`;
+    });
+
+    // Inline code
+    html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
+
+    // Tables: detect lines with | separators
+    html = html.replace(/((?:^|\n)\|.+\|(?:\n\|.+\|)+)/g, (block) => {
+        const rows = block.trim().split('\n').filter(r => r.trim());
+        let table = '<table class="md-table">';
+        rows.forEach((row, i) => {
+            if (/^\|[\s\-:|]+\|$/.test(row.trim())) return;
+            const cells = row.split('|').filter((_, idx, arr) => idx > 0 && idx < arr.length - 1);
+            const tag = i === 0 ? 'th' : 'td';
+            table += '<tr>' + cells.map(c => `<${tag}>${c.trim()}</${tag}>`).join('') + '</tr>';
+        });
+        table += '</table>';
+        return table;
+    });
+
+    // Headers
+    html = html.replace(/^#### (.+)$/gm, '<h4 class="md-h4">$1</h4>');
+    html = html.replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>');
+    html = html.replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>');
+    html = html.replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>');
+
+    // Bold and italic
+    html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+    // Checkbox lists
+    html = html.replace(/^- \[x\] (.+)$/gm, '<li class="md-li md-check done">$1</li>');
+    html = html.replace(/^- \[ \] (.+)$/gm, '<li class="md-li md-check">$1</li>');
+
+    // Unordered lists
+    html = html.replace(/^- (.+)$/gm, '<li class="md-li">$1</li>');
+    html = html.replace(/((?:<li class="md-li[^"]*">.*<\/li>\n?)+)/g, '<ul class="md-ul">$1</ul>');
+
+    // Ordered lists
+    html = html.replace(/^\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
+    html = html.replace(/((?:<li class="md-oli">.*<\/li>\n?)+)/g, '<ol class="md-ol">$1</ol>');
+
+    // Horizontal rule
+    html = html.replace(/^---$/gm, '<hr class="md-hr">');
+
+    // Paragraphs (double newlines)
+    html = html.replace(/\n\n/g, '</p><p class="md-p">');
+    html = '<p class="md-p">' + html + '</p>';
+    html = html.replace(/<p class="md-p">\s*<\/p>/g, '');
+
+    return html;
 }
 
 // ── Left Panel Modules ───────────────────────────────
@@ -475,7 +544,7 @@ async function loadSessionDetail(sessionId) {
         feed.innerHTML = "";
         addSysMsg(`ARCHIVE: ${session.name || "Unnamed"} -- ${new Date(session.created).toLocaleString()}`);
         for (const msg of session.messages) {
-            addMessage(msg.role === "user" ? "user" : "adjutant", msg.content);
+            addMessage(msg.role === "user" ? "user" : "adjutant", msg.content, null, true);
         }
         addSysMsg("-- END OF ARCHIVED SESSION --");
     } catch (e) {
