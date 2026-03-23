@@ -1,21 +1,36 @@
-/* Adjutant Web UI — Briefing Room Client */
+/* Adjutant Command Center — Client */
 
-const briefingText = document.getElementById("briefing-text");
+const feed = document.getElementById("briefing-text");
 const chatForm = document.getElementById("chat-form");
 const chatInput = document.getElementById("chat-input");
 const btnSend = document.getElementById("btn-send");
 const btnCancel = document.getElementById("btn-cancel");
 const statusText = document.getElementById("status-text");
-const statusContent = statusText.parentElement;
+const statusDot = document.getElementById("status-dot");
+const uplinkStatus = document.getElementById("uplink-status");
 const modeBar = document.getElementById("mode-bar");
-const portrait = document.getElementById("adjutant-portrait");
+const avatar = document.getElementById("adjutant-portrait");
+const indicator = document.getElementById("terminal-indicator");
+const imageBar = document.getElementById("image-bar");
+const clockEl = document.getElementById("clock");
 
 let ws = null;
 let streaming = false;
 let currentContent = null;
 let pendingImages = [];
 
-const imageBar = document.getElementById("image-bar");
+// ── Clock ────────────────────────────────────────────
+
+function updateClock() {
+    const now = new Date();
+    clockEl.textContent = now.toTimeString().slice(0, 8);
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+function timestamp() {
+    return new Date().toTimeString().slice(0, 8);
+}
 
 // ── WebSocket ────────────────────────────────────────
 
@@ -25,11 +40,15 @@ function connect() {
 
     ws.onopen = () => {
         setStatus("ONLINE", "online");
+        uplinkStatus.textContent = "ACTIVE";
+        uplinkStatus.className = "status-value uplink online";
     };
 
     ws.onclose = () => {
         setStatus("DISCONNECTED", "error");
-        setPortrait("idle");
+        setAvatar("idle");
+        uplinkStatus.textContent = "LOST";
+        uplinkStatus.className = "status-value uplink error";
         setTimeout(connect, 3000);
     };
 
@@ -38,23 +57,23 @@ function connect() {
     };
 
     ws.onmessage = (event) => {
-        const msg = JSON.parse(event.data);
-        handleMessage(msg);
+        handleMessage(JSON.parse(event.data));
     };
 }
 
 function handleMessage(msg) {
     switch (msg.type) {
         case "init":
-            renderModeBar(msg.sops);
+            renderModules(msg.sops);
             setStatus("AWAITING ORDERS", "online");
             break;
 
         case "stream_start":
             streaming = true;
             updateButtons();
-            setPortrait("active");
-            currentContent = addEntry("adjutant", "");
+            setAvatar("active");
+            setIndicator("RECEIVING...");
+            currentContent = addMessage("adjutant", "");
             currentContent.classList.add("streaming");
             break;
 
@@ -68,22 +87,22 @@ function handleMessage(msg) {
         case "stream_end":
             streaming = false;
             updateButtons();
-            setPortrait("idle");
-            if (currentContent) {
-                currentContent.classList.remove("streaming");
-            }
+            setAvatar("idle");
+            setIndicator("");
+            if (currentContent) currentContent.classList.remove("streaming");
             currentContent = null;
             setStatus("AWAITING ORDERS", "online");
-            setSopDisabled(false);
+            setModulesDisabled(false);
             break;
 
         case "sop_start":
-            addSystemMsg(`${msg.icon} ${msg.label}`);
+            addSysMsg(`EXECUTING: ${msg.label.toUpperCase()}`);
             streaming = true;
             updateButtons();
-            setPortrait("active");
+            setAvatar("active");
             setStatus(`SOP: ${msg.label.toUpperCase()}`, "online");
-            currentContent = addEntry("adjutant", "");
+            setIndicator("PROCESSING...");
+            currentContent = addMessage("adjutant", "");
             currentContent.classList.add("streaming");
             break;
 
@@ -92,42 +111,50 @@ function handleMessage(msg) {
             break;
 
         case "file_written":
-            addSystemMsg(`FILE WRITTEN: ${msg.path}`);
+            addSysMsg(`FILE WRITTEN: ${msg.path}`);
             break;
 
         case "error":
-            addError(msg.data);
+            addErrorMsg(msg.data);
             streaming = false;
             updateButtons();
-            setPortrait("idle");
+            setAvatar("idle");
+            setIndicator("");
             setStatus("ERROR", "error");
-            setSopDisabled(false);
+            setModulesDisabled(false);
             break;
 
         case "cancelled":
             streaming = false;
             updateButtons();
-            setPortrait("idle");
+            setAvatar("idle");
+            setIndicator("");
             if (currentContent) {
                 currentContent.classList.remove("streaming");
-                currentContent.textContent += "\n\n[TRANSMISSION CANCELLED]";
+                currentContent.textContent += "\n\n[TRANSMISSION ABORTED]";
             }
             currentContent = null;
             setStatus("AWAITING ORDERS", "online");
-            setSopDisabled(false);
+            setModulesDisabled(false);
             break;
     }
 }
 
-// ── UI Helpers ───────────────────────────────────────
+// ── UI State ─────────────────────────────────────────
 
 function setStatus(text, state) {
     statusText.textContent = text;
-    statusContent.className = "status-content" + (state ? " " + state : "");
+    statusText.className = "status-value" + (state ? " " + state : "");
+    statusDot.className = "status-dot" + (state ? " " + state : "");
 }
 
-function setPortrait(state) {
-    portrait.className = "adjutant-portrait " + state;
+function setAvatar(state) {
+    avatar.className = "ai-avatar" + (state === "active" ? " active" : "");
+}
+
+function setIndicator(text) {
+    indicator.textContent = text;
+    indicator.className = "terminal-indicator" + (text ? " active" : "");
 }
 
 function updateButtons() {
@@ -136,67 +163,82 @@ function updateButtons() {
     chatInput.disabled = streaming;
 }
 
-function setSopDisabled(disabled) {
-    modeBar.querySelectorAll(".mode-pill").forEach((btn) => {
+function setModulesDisabled(disabled) {
+    modeBar.querySelectorAll(".module-btn").forEach(btn => {
         btn.disabled = disabled;
         if (!disabled) btn.classList.remove("running");
     });
 }
 
+// ── Terminal Feed ────────────────────────────────────
+
 function clearWelcome() {
-    const welcome = briefingText.querySelector(".welcome");
-    if (welcome) welcome.remove();
+    const w = feed.querySelector(".welcome-screen");
+    if (w) w.remove();
 }
 
-function addEntry(role, text, imagePaths) {
+function addMessage(role, text, imagePaths) {
     clearWelcome();
 
-    const entry = document.createElement("div");
-    entry.className = "briefing-entry";
+    const isCmd = role === "user";
+    const cls = isCmd ? "commander" : "adjutant";
 
-    const speaker = document.createElement("div");
-    speaker.className = `briefing-speaker ${role}`;
-    speaker.textContent = role === "user" ? "COMMANDER" : "ADJUTANT";
+    const msg = document.createElement("div");
+    msg.className = `msg ${cls}`;
 
-    const content = document.createElement("div");
-    content.className = "briefing-content";
-    content.textContent = text;
+    const header = document.createElement("div");
+    header.className = "msg-header";
 
-    entry.appendChild(speaker);
+    const sender = document.createElement("span");
+    sender.className = "msg-sender";
+    sender.textContent = isCmd ? "COMMANDER" : "ADJUTANT";
+
+    const time = document.createElement("span");
+    time.className = "msg-time";
+    time.textContent = `[${timestamp()}]`;
+
+    header.appendChild(sender);
+    header.appendChild(time);
+    msg.appendChild(header);
 
     if (imagePaths && imagePaths.length > 0) {
         const imgDiv = document.createElement("div");
-        imgDiv.className = "briefing-images";
+        imgDiv.className = "msg-images";
         for (const p of imagePaths) {
             const tag = document.createElement("span");
-            tag.className = "briefing-image-tag";
+            tag.className = "msg-image-tag";
             tag.textContent = p.split("/").pop();
             imgDiv.appendChild(tag);
         }
-        entry.appendChild(imgDiv);
+        msg.appendChild(imgDiv);
     }
 
-    entry.appendChild(content);
-    briefingText.appendChild(entry);
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.textContent = text;
+
+    msg.appendChild(body);
+    feed.appendChild(msg);
     scrollToBottom();
 
-    return content;
+    return body;
 }
 
-function addSystemMsg(text) {
+function addSysMsg(text) {
     clearWelcome();
     const div = document.createElement("div");
-    div.className = "briefing-system";
+    div.className = "sys-msg";
     div.textContent = text;
-    briefingText.appendChild(div);
+    feed.appendChild(div);
     scrollToBottom();
 }
 
-function addError(text) {
+function addErrorMsg(text) {
+    clearWelcome();
     const div = document.createElement("div");
-    div.className = "briefing-error";
+    div.className = "sys-msg error-msg";
     div.textContent = `ERROR: ${text}`;
-    briefingText.appendChild(div);
+    feed.appendChild(div);
     scrollToBottom();
 }
 
@@ -204,46 +246,83 @@ function showFileConfirm(path, content) {
     const bar = document.createElement("div");
     bar.className = "file-confirm";
     bar.innerHTML = `
-        <span>Write output to <strong>${path}</strong>?</span>
-        <button class="cmd-btn transmit" id="fc-yes">Write</button>
-        <button class="cmd-btn" id="fc-no">Skip</button>
+        <span>Write output to <strong>${escapeHtml(path)}</strong>?</span>
+        <button class="action-btn execute">WRITE</button>
+        <button class="action-btn">SKIP</button>
     `;
-    briefingText.appendChild(bar);
+    feed.appendChild(bar);
     scrollToBottom();
 
-    bar.querySelector("#fc-yes").addEventListener("click", () => {
+    const btns = bar.querySelectorAll(".action-btn");
+    btns[0].addEventListener("click", () => {
         ws.send(JSON.stringify({ type: "sop_file_write", path, content }));
         bar.remove();
     });
-    bar.querySelector("#fc-no").addEventListener("click", () => {
-        addSystemMsg("FILE WRITE SKIPPED");
+    btns[1].addEventListener("click", () => {
+        addSysMsg("FILE WRITE SKIPPED");
         bar.remove();
     });
 }
 
 function scrollToBottom() {
-    briefingText.scrollTop = briefingText.scrollHeight;
+    feed.scrollTop = feed.scrollHeight;
 }
 
-function renderModeBar(sops) {
+function escapeHtml(str) {
+    const d = document.createElement("div");
+    d.textContent = str;
+    return d.innerHTML;
+}
+
+// ── Left Panel Modules ───────────────────────────────
+
+function renderModules(sops) {
     modeBar.innerHTML = "";
     for (const sop of sops) {
         const btn = document.createElement("button");
-        btn.className = "mode-pill";
-        btn.textContent = `${sop.icon} ${sop.label}`;
+        btn.className = "module-btn";
+        btn.innerHTML = `<span class="module-icon">${sop.icon}</span><span class="module-label">${escapeHtml(sop.label)}</span>`;
         btn.title = sop.description;
         btn.addEventListener("click", () => {
             if (streaming) return;
             btn.classList.add("running");
-            setSopDisabled(true);
-            btn.disabled = false; // Keep clicked one visible
+            setModulesDisabled(true);
+            btn.disabled = false;
             runSop(sop.key);
         });
         modeBar.appendChild(btn);
     }
 }
 
-// ── Image Handling ──────────────────────────────────
+// ── Actions ──────────────────────────────────────────
+
+function sendMessage(text) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!text.trim() && pendingImages.length === 0) return;
+
+    const imagePaths = pendingImages.filter(i => i.path).map(i => i.path);
+    addMessage("user", text, imagePaths);
+    setStatus("PROCESSING...", "online");
+    setAvatar("active");
+    setIndicator("TRANSMITTING...");
+
+    ws.send(JSON.stringify({ type: "message", text, image_paths: imagePaths }));
+    pendingImages = [];
+    renderImageBar();
+}
+
+function runSop(key) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (streaming) return;
+    ws.send(JSON.stringify({ type: "run_sop", key }));
+}
+
+function cancelStream() {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    ws.send(JSON.stringify({ type: "cancel" }));
+}
+
+// ── Image Handling ───────────────────────────────────
 
 function renderImageBar() {
     if (pendingImages.length === 0) {
@@ -252,44 +331,31 @@ function renderImageBar() {
         return;
     }
     imageBar.classList.add("active");
-    imageBar.innerHTML = pendingImages.map((img, i) => `
-        <span class="image-tag">
-            ${img.name}
-            <span class="image-remove" data-idx="${i}">&times;</span>
-        </span>
-    `).join("");
+    imageBar.innerHTML = pendingImages.map((img, i) =>
+        `<span class="image-tag">${escapeHtml(img.name)} <span class="image-remove" data-idx="${i}">&times;</span></span>`
+    ).join("");
     imageBar.querySelectorAll(".image-remove").forEach(el => {
-        el.addEventListener("click", () => removeImage(parseInt(el.dataset.idx)));
+        el.addEventListener("click", () => {
+            pendingImages.splice(parseInt(el.dataset.idx), 1);
+            renderImageBar();
+        });
     });
-}
-
-function removeImage(idx) {
-    pendingImages.splice(idx, 1);
-    renderImageBar();
 }
 
 async function uploadImage(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
         reader.onload = async () => {
-            const base64 = reader.result.split(",")[1];
             try {
                 const resp = await fetch("/api/upload", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ data: base64, filename: file.name }),
+                    body: JSON.stringify({ data: reader.result.split(",")[1], filename: file.name }),
                 });
                 const result = await resp.json();
-                if (result.error) {
-                    addError(result.error);
-                    reject(new Error(result.error));
-                } else {
-                    resolve(result.path);
-                }
-            } catch (e) {
-                addError(`Upload failed: ${e.message}`);
-                reject(e);
-            }
+                if (result.error) { addErrorMsg(result.error); reject(new Error(result.error)); }
+                else resolve(result.path);
+            } catch (e) { addErrorMsg(`Upload failed: ${e.message}`); reject(e); }
         };
         reader.readAsDataURL(file);
     });
@@ -305,34 +371,6 @@ function addImageFiles(files) {
     }
 }
 
-// ── Actions ──────────────────────────────────────────
-
-function sendMessage(text) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!text.trim() && pendingImages.length === 0) return;
-
-    const imagePaths = pendingImages.filter(i => i.path).map(i => i.path);
-    addEntry("user", text, imagePaths);
-    setStatus("PROCESSING...", "online");
-    setPortrait("active");
-
-    ws.send(JSON.stringify({ type: "message", text, image_paths: imagePaths }));
-    pendingImages = [];
-    renderImageBar();
-}
-
-function runSop(key) {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (streaming) return;
-
-    ws.send(JSON.stringify({ type: "run_sop", key }));
-}
-
-function cancelStream() {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    ws.send(JSON.stringify({ type: "cancel" }));
-}
-
 // ── Event Listeners ──────────────────────────────────
 
 chatForm.addEventListener("submit", (e) => {
@@ -340,7 +378,6 @@ chatForm.addEventListener("submit", (e) => {
     if (streaming) return;
     const text = chatInput.value.trim();
     if (!text && pendingImages.length === 0) return;
-
     sendMessage(text);
     chatInput.value = "";
     chatInput.style.height = "auto";
@@ -348,22 +385,23 @@ chatForm.addEventListener("submit", (e) => {
 
 btnCancel.addEventListener("click", cancelStream);
 
-// Auto-resize textarea
 chatInput.addEventListener("input", () => {
     chatInput.style.height = "auto";
-    chatInput.style.height = Math.min(chatInput.scrollHeight, 60) + "px";
+    chatInput.style.height = Math.min(chatInput.scrollHeight, 80) + "px";
 });
 
-// Shift+Enter for newline, Enter to send
 chatInput.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
         chatForm.requestSubmit();
     }
+    if (e.key === "Escape" && pendingImages.length > 0) {
+        pendingImages = [];
+        renderImageBar();
+    }
 });
 
-// ── Image Paste / Drop ──────────────────────────────
-
+// Paste
 document.addEventListener("paste", (e) => {
     const items = e.clipboardData?.items;
     if (!items) return;
@@ -380,29 +418,23 @@ document.addEventListener("paste", (e) => {
     }
 });
 
-const briefingPanel = document.querySelector(".briefing-panel");
+// Drag & drop
+const terminalPanel = document.querySelector(".terminal-panel");
 
-briefingPanel.addEventListener("dragover", (e) => {
+terminalPanel.addEventListener("dragover", (e) => {
     e.preventDefault();
-    briefingPanel.classList.add("drag-over");
+    terminalPanel.style.borderColor = "var(--primary)";
 });
 
-briefingPanel.addEventListener("dragleave", () => {
-    briefingPanel.classList.remove("drag-over");
+terminalPanel.addEventListener("dragleave", () => {
+    terminalPanel.style.borderColor = "";
 });
 
-briefingPanel.addEventListener("drop", (e) => {
+terminalPanel.addEventListener("drop", (e) => {
     e.preventDefault();
-    briefingPanel.classList.remove("drag-over");
+    terminalPanel.style.borderColor = "";
     const files = [...e.dataTransfer.files].filter(f => f.type.startsWith("image/"));
     if (files.length > 0) addImageFiles(files);
-});
-
-chatInput.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && pendingImages.length > 0) {
-        pendingImages = [];
-        renderImageBar();
-    }
 });
 
 // ── Session History ──────────────────────────────────
@@ -413,26 +445,25 @@ const sessionsList = document.getElementById("sessions-list");
 
 btnSessions.addEventListener("click", async () => {
     modalSessions.style.display = "flex";
-    sessionsList.innerHTML = '<div style="color:var(--text-dim)">Loading...</div>';
+    sessionsList.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
     try {
         const resp = await fetch("/api/sessions");
         const sessions = await resp.json();
         if (sessions.length === 0) {
-            sessionsList.innerHTML = '<div style="color:var(--text-dim)">No saved sessions</div>';
+            sessionsList.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">No archived sessions</div>';
             return;
         }
         sessionsList.innerHTML = sessions.map(s => `
             <div class="session-item" data-id="${s.id}">
-                <div class="session-name">${s.name || "Unnamed"}</div>
+                <div class="session-name">${escapeHtml(s.name || "Unnamed")}</div>
                 <div class="session-meta">${s.message_count} messages &middot; ${new Date(s.created).toLocaleString()}</div>
             </div>
         `).join("");
-
         sessionsList.querySelectorAll(".session-item").forEach(el => {
             el.addEventListener("click", () => loadSessionDetail(el.dataset.id));
         });
     } catch (e) {
-        sessionsList.innerHTML = `<div style="color:var(--text-error)">Error: ${e.message}</div>`;
+        sessionsList.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${e.message}</div>`;
     }
 });
 
@@ -441,34 +472,27 @@ async function loadSessionDetail(sessionId) {
         const resp = await fetch(`/api/sessions/${sessionId}`);
         const session = await resp.json();
         modalSessions.style.display = "none";
-
-        // Render historical messages
-        briefingText.innerHTML = "";
-        addSystemMsg(`SESSION: ${session.name || "Unnamed"} — ${new Date(session.created).toLocaleString()}`);
+        feed.innerHTML = "";
+        addSysMsg(`ARCHIVE: ${session.name || "Unnamed"} -- ${new Date(session.created).toLocaleString()}`);
         for (const msg of session.messages) {
-            addEntry(msg.role === "user" ? "user" : "adjutant", msg.content);
+            addMessage(msg.role === "user" ? "user" : "adjutant", msg.content);
         }
-        addSystemMsg("— END OF HISTORICAL SESSION —");
+        addSysMsg("-- END OF ARCHIVED SESSION --");
     } catch (e) {
-        addError(`Failed to load session: ${e.message}`);
+        addErrorMsg(`Failed to load session: ${e.message}`);
     }
 }
 
-// Modal close handlers
-document.querySelectorAll(".modal-close").forEach(btn => {
-    btn.addEventListener("click", () => {
-        const modal = document.getElementById(btn.dataset.modal);
-        if (modal) modal.style.display = "none";
-    });
+// Modal close
+document.getElementById("modal-close-btn").addEventListener("click", () => {
+    modalSessions.style.display = "none";
 });
 
-document.querySelectorAll(".modal-overlay").forEach(overlay => {
-    overlay.addEventListener("click", (e) => {
-        if (e.target === overlay) overlay.style.display = "none";
-    });
+modalSessions.addEventListener("click", (e) => {
+    if (e.target === modalSessions) modalSessions.style.display = "none";
 });
 
 // ── Init ─────────────────────────────────────────────
 
-setPortrait("idle");
+setAvatar("idle");
 connect();
