@@ -470,7 +470,7 @@ def _repl():
 
 
 @cli.command()
-@click.option("--port", "-p", default=8000, help="Port to listen on")
+@click.option("--port", "-p", default=8100, help="Port to listen on")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--no-open", is_flag=True, help="Don't auto-open browser")
 def web(port: int, host: str, no_open: bool):

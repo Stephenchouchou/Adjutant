@@ -120,6 +120,109 @@ def save_attachment(data: bytes, root: Path, ext: str = ".png") -> str:
     return str(rel_dir / fname)
 
 
+def list_directory(root: Path, rel_path: str = "") -> list[dict]:
+    """List files and directories under root/rel_path.
+
+    Returns list of dicts with keys: name, type ('file'|'dir'), path (relative).
+    Only shows .md files and directories (hides dotfiles, assets, etc.).
+    """
+    target = resolve_safe(root / rel_path, root) if rel_path else root.resolve()
+    if not target.is_dir():
+        raise FileNotFoundError(f"Directory not found: {target}")
+
+    items: list[dict] = []
+    try:
+        for entry in sorted(target.iterdir(), key=lambda e: (not e.is_dir(), e.name.lower())):
+            if entry.name.startswith("."):
+                continue
+            rel = str(entry.relative_to(root.resolve()))
+            if entry.is_dir():
+                items.append({"name": entry.name, "type": "dir", "path": rel})
+            elif entry.suffix.lower() == ".md":
+                items.append({"name": entry.name, "type": "file", "path": rel})
+    except PermissionError:
+        pass
+    return items
+
+
+def get_notebook_stats(root: Path) -> dict:
+    """Gather quick stats about the notebook for the HUD.
+
+    Returns counts plus preview lists for the top-bar popups.
+    """
+    from datetime import datetime as dt
+
+    stats: dict = {
+        "inbox_count": 0,
+        "inbox_items": [],
+        "task_count": 0,
+        "task_items": [],
+        "has_today_daily": False,
+        "daily_recent": [],
+        "total_notes": 0,
+    }
+
+    # Inbox items (unchecked)
+    inbox = root / "inbox.md"
+    if inbox.is_file():
+        try:
+            text = inbox.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("- [ ]"):
+                    label = stripped[5:].strip()
+                    stats["inbox_items"].append(label)
+            stats["inbox_count"] = len(stats["inbox_items"])
+        except Exception:
+            pass
+
+    # Task count (unchecked)
+    tasks = root / "tasks.md"
+    if tasks.is_file():
+        try:
+            text = tasks.read_text(encoding="utf-8")
+            for line in text.splitlines():
+                stripped = line.strip()
+                if stripped.startswith("- [ ]"):
+                    label = stripped[5:].strip()
+                    stats["task_items"].append(label)
+            stats["task_count"] = len(stats["task_items"])
+        except Exception:
+            pass
+
+    # Today's daily note — support YYYYMMDD and YYYY-MM-DD formats
+    today_compact = dt.now().strftime("%Y%m%d")
+    today_dashed = dt.now().strftime("%Y-%m-%d")
+    daily_dir = root / "journal" / "daily"
+    if daily_dir.is_dir():
+        try:
+            daily_files = sorted(
+                [f for f in daily_dir.iterdir() if f.is_file() and f.suffix == ".md"],
+                key=lambda f: f.name,
+                reverse=True,
+            )
+            stats["has_today_daily"] = any(
+                f.stem.startswith(today_compact) or f.stem.startswith(today_dashed)
+                for f in daily_files
+            )
+            # Recent 7 daily files for preview
+            for f in daily_files[:7]:
+                stats["daily_recent"].append({
+                    "name": f.stem,
+                    "path": str(f.relative_to(root.resolve())),
+                })
+        except Exception:
+            pass
+
+    # Total .md files
+    try:
+        stats["total_notes"] = sum(1 for _ in root.rglob("*.md"))
+    except Exception:
+        pass
+
+    return stats
+
+
 def write_file(path: Path, content: str, root: Path) -> None:
     """Write content to a file safely (within root)."""
     safe_path = resolve_safe(path, root)

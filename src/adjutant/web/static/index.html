@@ -15,61 +15,72 @@
         <!-- ═══ TOP BAR ═══ -->
         <header class="top-bar">
             <div class="top-bar-left">
-                <div class="ai-avatar" id="adjutant-portrait">
-                    <div class="avatar-ring"></div>
-                    <img src="/static/portrait-adjutant.png" alt="ADJUTANT" class="avatar-img">
-                    <div class="avatar-pulse"></div>
-                </div>
-                <div class="system-id">
-                    <div class="system-name">ADJUTANT <span class="core-label">CORE</span></div>
-                    <div class="system-sub">TACTICAL KNOWLEDGE MANAGEMENT SYSTEM</div>
-                </div>
+                <div class="system-name">ADJUTANT <span class="core-label">CORE</span></div>
             </div>
             <div class="top-bar-right">
-                <div class="status-block">
-                    <span class="status-label">SYS</span>
-                    <span class="status-value" id="status-text">INITIALIZING</span>
-                    <span class="status-dot" id="status-dot"></span>
+                <div class="stat-block" data-stat="inbox" title="Inbox items (unchecked)">
+                    <span class="stat-icon">📥</span>
+                    <span class="stat-value" id="stat-inbox">—</span>
+                    <span class="stat-label">INBOX</span>
+                    <div class="stat-popup" id="popup-inbox"></div>
                 </div>
+                <div class="stat-block" data-stat="tasks" title="Open tasks">
+                    <span class="stat-icon">✅</span>
+                    <span class="stat-value" id="stat-tasks">—</span>
+                    <span class="stat-label">TASKS</span>
+                    <div class="stat-popup" id="popup-tasks"></div>
+                </div>
+                <div class="stat-block" data-stat="daily" title="Today's daily note">
+                    <span class="stat-icon">📋</span>
+                    <span class="stat-value" id="stat-daily">—</span>
+                    <span class="stat-label">DAILY</span>
+                    <div class="stat-popup" id="popup-daily"></div>
+                </div>
+                <div class="stat-block" data-stat="notes" title="Total notes">
+                    <span class="stat-icon">📁</span>
+                    <span class="stat-value" id="stat-notes">—</span>
+                    <span class="stat-label">NOTES</span>
+                </div>
+                <div class="top-bar-sep"></div>
                 <div class="status-block">
-                    <span class="status-label">UPLINK</span>
-                    <span class="status-value uplink" id="uplink-status">—</span>
+                    <span class="status-dot" id="status-dot"></span>
+                    <span class="status-value" id="status-text">INIT</span>
                 </div>
                 <div class="clock-block">
                     <span class="clock" id="clock">00:00:00</span>
                 </div>
+                <div class="palette-hint" title="Command Palette">
+                    <kbd>Ctrl</kbd><span>+</span><kbd>K</kbd>
+                </div>
             </div>
         </header>
 
-        <!-- ═══ MAIN AREA ═══ -->
-        <div class="main-area">
-            <!-- ═══ LEFT PANEL ═══ -->
-            <aside class="left-panel">
-                <div class="panel-header">OPERATIONS</div>
-                <nav class="module-list" id="mode-bar">
-                    <!-- Populated by JS -->
-                </nav>
-                <div class="panel-divider"></div>
-                <nav class="module-list module-list-util">
-                    <button class="module-btn" id="btn-sessions" type="button">
-                        <span class="module-icon">📂</span>
-                        <span class="module-label">History</span>
-                    </button>
-                </nav>
-            </aside>
+        <!-- ═══ MAIN CONTENT: Avatar Strip + Terminal ═══ -->
+        <div class="main-row">
+            <!-- ═══ AVATAR STRIP (persistent left) ═══ -->
+            <div class="avatar-strip">
+                <div class="ai-avatar" id="adjutant-portrait">
+                    <div class="avatar-energy-ring"></div>
+                    <div class="avatar-ring"></div>
+                    <img src="/static/portrait-adjutant.png" alt="ADJUTANT" class="avatar-img">
+                    <div class="avatar-pulse"></div>
+                </div>
+                <div class="avatar-status-text" id="avatar-status-text">STANDING BY</div>
+            </div>
 
-            <!-- ═══ MAIN TERMINAL ═══ -->
+            <!-- ═══ MAIN TERMINAL (Full Width) ═══ -->
             <main class="terminal-panel">
                 <div class="terminal-header">
                     <span class="terminal-title">COMMAND FEED</span>
-                    <span class="terminal-indicator" id="terminal-indicator"></span>
+                    <div class="terminal-header-right">
+                        <button class="action-btn mini" id="btn-sessions" type="button">ARCHIVE</button>
+                        <span class="terminal-indicator" id="terminal-indicator"></span>
+                    </div>
                 </div>
                 <div class="terminal-feed" id="briefing-text">
-                    <div class="welcome-screen">
-                        <div class="welcome-logo">ADJUTANT</div>
-                        <div class="welcome-tagline">TACTICAL KNOWLEDGE MANAGEMENT</div>
-                        <div class="welcome-version">v0.1.0 — SYSTEM READY</div>
-                        <div class="welcome-hint">Issue a command or select an operation module</div>
+                    <div class="welcome-screen" id="welcome-screen">
+                        <div class="welcome-greeting">指揮官，系統已就緒。</div>
+                        <div class="welcome-sub">輸入指令開始，或按 <kbd>Ctrl</kbd>+<kbd>K</kbd> 開啟操作面板</div>
                     </div>
                 </div>
             </main>
@@ -80,9 +91,8 @@
             <div id="image-bar" class="image-bar"></div>
             <form id="chat-form" class="command-line">
                 <span class="prompt-symbol">&gt;</span>
-                <span class="prompt-label">COMMAND INPUT:</span>
                 <textarea id="chat-input" class="command-input"
-                    placeholder="Enter directive..."
+                    placeholder="Enter directive... (Ctrl+K for operations)"
                     autocomplete="off" autofocus rows="1"></textarea>
                 <div class="command-actions">
                     <button type="submit" class="action-btn execute" id="btn-send">EXECUTE</button>
@@ -92,12 +102,39 @@
         </footer>
     </div>
 
+    <!-- ═══ COMMAND PALETTE ═══ -->
+    <div id="command-palette" class="palette-overlay" style="display:none">
+        <div class="palette-panel">
+            <div class="palette-header">
+                <span class="palette-title">OPERATIONS</span>
+                <kbd class="palette-esc">ESC</kbd>
+            </div>
+            <input type="text" class="palette-search" id="palette-search"
+                placeholder="Search operations..." autocomplete="off">
+            <div class="palette-list" id="palette-list"></div>
+        </div>
+    </div>
+
+    <!-- ═══ FILE VIEWER MODAL ═══ -->
+    <div id="modal-file-viewer" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wide">
+            <div class="modal-header">
+                <span class="modal-title" id="file-viewer-title">FILE</span>
+                <div class="modal-header-actions">
+                    <button class="action-btn mini" id="file-viewer-back" style="display:none">BACK</button>
+                    <button class="action-btn mini" id="file-viewer-close">CLOSE</button>
+                </div>
+            </div>
+            <div class="modal-body" id="file-viewer-body"></div>
+        </div>
+    </div>
+
     <!-- ═══ SESSION HISTORY MODAL ═══ -->
     <div id="modal-sessions" class="modal-overlay" style="display:none">
         <div class="modal-panel">
             <div class="modal-header">
                 <span class="modal-title">BRIEFING ARCHIVE</span>
-                <button class="action-btn" id="modal-close-btn" data-modal="modal-sessions">CLOSE</button>
+                <button class="action-btn mini" id="modal-close-btn" data-modal="modal-sessions">CLOSE</button>
             </div>
             <div class="modal-body" id="sessions-list"></div>
         </div>

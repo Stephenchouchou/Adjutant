@@ -1,4 +1,4 @@
-/* Adjutant Command Center — Client */
+/* Adjutant Command Center — Client v2 */
 
 const feed = document.getElementById("briefing-text");
 const chatForm = document.getElementById("chat-form");
@@ -7,29 +7,128 @@ const btnSend = document.getElementById("btn-send");
 const btnCancel = document.getElementById("btn-cancel");
 const statusText = document.getElementById("status-text");
 const statusDot = document.getElementById("status-dot");
-const uplinkStatus = document.getElementById("uplink-status");
-const modeBar = document.getElementById("mode-bar");
 const avatar = document.getElementById("adjutant-portrait");
+const avatarStatusText = document.getElementById("avatar-status-text");
 const indicator = document.getElementById("terminal-indicator");
 const imageBar = document.getElementById("image-bar");
 const clockEl = document.getElementById("clock");
+const paletteOverlay = document.getElementById("command-palette");
+const paletteSearch = document.getElementById("palette-search");
+const paletteList = document.getElementById("palette-list");
+const paletteHint = document.querySelector(".palette-hint");
+
+// Stats elements
+const statInbox = document.getElementById("stat-inbox");
+const statTasks = document.getElementById("stat-tasks");
+const statDaily = document.getElementById("stat-daily");
+const statNotes = document.getElementById("stat-notes");
 
 let ws = null;
 let streaming = false;
 let currentContent = null;
+let currentSopCard = null;
 let pendingImages = [];
+let sopList = [];
+let paletteSelectedIdx = 0;
 
 // ── Clock ────────────────────────────────────────────
 
 function updateClock() {
-    const now = new Date();
-    clockEl.textContent = now.toTimeString().slice(0, 8);
+    clockEl.textContent = new Date().toTimeString().slice(0, 8);
 }
 setInterval(updateClock, 1000);
 updateClock();
 
 function timestamp() {
     return new Date().toTimeString().slice(0, 8);
+}
+
+// ── Stats HUD ────────────────────────────────────────
+
+const popupInbox = document.getElementById("popup-inbox");
+const popupTasks = document.getElementById("popup-tasks");
+const popupDaily = document.getElementById("popup-daily");
+
+let currentStats = null;
+
+function updateStats(stats) {
+    if (!stats) return;
+    currentStats = stats;
+
+    statInbox.textContent = stats.inbox_count;
+    statInbox.className = "stat-value" + (stats.inbox_count > 0 ? " warn" : "");
+
+    statTasks.textContent = stats.task_count;
+    statTasks.className = "stat-value" + (stats.task_count > 5 ? " warn" : "");
+
+    statDaily.textContent = stats.has_today_daily ? "DONE" : "NONE";
+    statDaily.className = "stat-value" + (stats.has_today_daily ? " good" : " warn");
+
+    statNotes.textContent = stats.total_notes;
+
+    // Build popup contents
+    buildPopupList(popupInbox, "INBOX", stats.inbox_items, null);
+    buildPopupList(popupTasks, "OPEN TASKS", stats.task_items, null);
+    buildDailyPopup(popupDaily, stats.daily_recent);
+}
+
+function buildPopupList(popup, title, items, onClick) {
+    if (!items || items.length === 0) {
+        popup.innerHTML = `<div class="stat-popup-header">${title}</div><div class="stat-popup-empty">Empty</div>`;
+        return;
+    }
+    let html = `<div class="stat-popup-header">${title} (${items.length})</div>`;
+    for (const item of items.slice(0, 15)) {
+        html += `<div class="stat-popup-item">${escapeHtml(item)}</div>`;
+    }
+    if (items.length > 15) {
+        html += `<div class="stat-popup-empty">+${items.length - 15} more...</div>`;
+    }
+    popup.innerHTML = html;
+}
+
+function buildDailyPopup(popup, dailies) {
+    if (!dailies || dailies.length === 0) {
+        popup.innerHTML = '<div class="stat-popup-header">DAILY NOTES</div><div class="stat-popup-empty">No daily notes found</div>';
+        return;
+    }
+    let html = '<div class="stat-popup-header">RECENT DAILIES</div>';
+    for (const d of dailies) {
+        html += `<div class="stat-popup-item" data-path="${escapeHtml(d.path)}">${escapeHtml(d.name)}</div>`;
+    }
+    popup.innerHTML = html;
+
+    // Click to open in file viewer
+    popup.querySelectorAll("[data-path]").forEach(el => {
+        el.addEventListener("click", (e) => {
+            e.stopPropagation();
+            closeAllPopups();
+            openFileViewer(el.dataset.path);
+        });
+    });
+}
+
+// Stat block click to toggle popup
+document.querySelectorAll(".stat-block[data-stat]").forEach(block => {
+    block.addEventListener("click", (e) => {
+        e.stopPropagation();
+        const popup = block.querySelector(".stat-popup");
+        if (!popup) return;
+        const isOpen = popup.classList.contains("open");
+        closeAllPopups();
+        if (!isOpen) popup.classList.add("open");
+    });
+});
+
+function closeAllPopups() {
+    document.querySelectorAll(".stat-popup.open").forEach(p => p.classList.remove("open"));
+}
+
+// Close popups on click outside
+document.addEventListener("click", () => closeAllPopups());
+
+function refreshStats() {
+    fetch("/api/stats").then(r => r.json()).then(updateStats).catch(() => {});
 }
 
 // ── WebSocket ────────────────────────────────────────
@@ -40,20 +139,16 @@ function connect() {
 
     ws.onopen = () => {
         setStatus("ONLINE", "online");
-        uplinkStatus.textContent = "ACTIVE";
-        uplinkStatus.className = "status-value uplink online";
     };
 
     ws.onclose = () => {
-        setStatus("DISCONNECTED", "error");
+        setStatus("OFFLINE", "error");
         setAvatar("idle");
-        uplinkStatus.textContent = "LOST";
-        uplinkStatus.className = "status-value uplink error";
         setTimeout(connect, 3000);
     };
 
     ws.onerror = () => {
-        setStatus("COMM ERROR", "error");
+        setStatus("ERROR", "error");
     };
 
     ws.onmessage = (event) => {
@@ -64,14 +159,16 @@ function connect() {
 function handleMessage(msg) {
     switch (msg.type) {
         case "init":
-            renderModules(msg.sops);
-            setStatus("AWAITING ORDERS", "online");
+            sopList = msg.sops || [];
+            updateStats(msg.stats);
+            setStatus("READY", "online");
+            setAvatar("idle");
             break;
 
         case "stream_start":
             streaming = true;
             updateButtons();
-            setAvatar("active");
+            setAvatar("responding");
             setIndicator("RECEIVING...");
             currentContent = addMessage("adjutant", "");
             currentContent.classList.add("streaming");
@@ -90,18 +187,18 @@ function handleMessage(msg) {
             setAvatar("idle");
             setIndicator("");
             finishEntry();
-            setStatus("AWAITING ORDERS", "online");
-            setModulesDisabled(false);
+            setStatus("READY", "online");
+            refreshStats();
             break;
 
         case "sop_start":
-            addSysMsg(`EXECUTING: ${msg.label.toUpperCase()}`);
             streaming = true;
             updateButtons();
-            setAvatar("active");
+            setAvatar("thinking");
             setStatus(`SOP: ${msg.label.toUpperCase()}`, "online");
             setIndicator("PROCESSING...");
-            currentContent = addMessage("adjutant", "");
+            currentSopCard = addSopCard(msg.icon, msg.label);
+            currentContent = currentSopCard.querySelector(".msg-body");
             currentContent.classList.add("streaming");
             break;
 
@@ -111,16 +208,17 @@ function handleMessage(msg) {
 
         case "file_written":
             addSysMsg(`FILE WRITTEN: ${msg.path}`);
+            refreshStats();
             break;
 
         case "error":
             addErrorMsg(msg.data);
             streaming = false;
             updateButtons();
-            setAvatar("idle");
+            setAvatar("error");
             setIndicator("");
             setStatus("ERROR", "error");
-            setModulesDisabled(false);
+            setTimeout(() => { setAvatar("idle"); setStatus("READY", "online"); }, 3000);
             break;
 
         case "cancelled":
@@ -132,8 +230,7 @@ function handleMessage(msg) {
                 currentContent.textContent += "\n\n[TRANSMISSION ABORTED]";
             }
             finishEntry();
-            setStatus("AWAITING ORDERS", "online");
-            setModulesDisabled(false);
+            setStatus("READY", "online");
             break;
     }
 }
@@ -147,7 +244,9 @@ function setStatus(text, state) {
 }
 
 function setAvatar(state) {
-    avatar.className = "ai-avatar" + (state === "active" ? " active" : "");
+    avatar.className = "ai-avatar " + state;
+    const labels = { idle: "STANDING BY", thinking: "PROCESSING", responding: "RESPONDING", error: "ERROR" };
+    avatarStatusText.textContent = labels[state] || "";
 }
 
 function setIndicator(text) {
@@ -161,17 +260,10 @@ function updateButtons() {
     chatInput.disabled = streaming;
 }
 
-function setModulesDisabled(disabled) {
-    modeBar.querySelectorAll(".module-btn").forEach(btn => {
-        btn.disabled = disabled;
-        if (!disabled) btn.classList.remove("running");
-    });
-}
-
 // ── Terminal Feed ────────────────────────────────────
 
 function clearWelcome() {
-    const w = feed.querySelector(".welcome-screen");
+    const w = document.getElementById("welcome-screen");
     if (w) w.remove();
 }
 
@@ -226,6 +318,35 @@ function addMessage(role, text, imagePaths, render) {
     return body;
 }
 
+function addSopCard(icon, label) {
+    clearWelcome();
+
+    const card = document.createElement("div");
+    card.className = "sop-card";
+
+    const header = document.createElement("div");
+    header.className = "sop-card-header";
+    header.innerHTML = `
+        <span class="sop-card-icon">${icon}</span>
+        <span class="sop-card-title">${escapeHtml(label.toUpperCase())}</span>
+        <span class="sop-card-time">[${timestamp()}]</span>
+    `;
+
+    const bodyWrap = document.createElement("div");
+    bodyWrap.className = "sop-card-body";
+
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    bodyWrap.appendChild(body);
+
+    card.appendChild(header);
+    card.appendChild(bodyWrap);
+    feed.appendChild(card);
+    scrollToBottom();
+
+    return card;
+}
+
 function addSysMsg(text) {
     clearWelcome();
     const div = document.createElement("div");
@@ -249,8 +370,8 @@ function showFileConfirm(path, content) {
     bar.className = "file-confirm";
     bar.innerHTML = `
         <span>Write output to <strong>${escapeHtml(path)}</strong>?</span>
-        <button class="action-btn execute">WRITE</button>
-        <button class="action-btn">SKIP</button>
+        <button class="action-btn execute mini">WRITE</button>
+        <button class="action-btn mini">SKIP</button>
     `;
     feed.appendChild(bar);
     scrollToBottom();
@@ -283,20 +404,18 @@ function finishEntry() {
         currentContent.innerHTML = renderMarkdown(raw);
     }
     currentContent = null;
+    currentSopCard = null;
 }
 
 function renderMarkdown(text) {
     let html = escapeHtml(text);
 
-    // Code blocks (``` ... ```)
     html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_, lang, code) => {
         return `<pre class="md-code"><code>${code.trim()}</code></pre>`;
     });
 
-    // Inline code
     html = html.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>');
 
-    // Tables: detect lines with | separators
     html = html.replace(/((?:^|\n)\|.+\|(?:\n\|.+\|)+)/g, (block) => {
         const rows = block.trim().split('\n').filter(r => r.trim());
         let table = '<table class="md-table">';
@@ -310,32 +429,25 @@ function renderMarkdown(text) {
         return table;
     });
 
-    // Headers
     html = html.replace(/^#### (.+)$/gm, '<h4 class="md-h4">$1</h4>');
     html = html.replace(/^### (.+)$/gm, '<h3 class="md-h3">$1</h3>');
     html = html.replace(/^## (.+)$/gm, '<h2 class="md-h2">$1</h2>');
     html = html.replace(/^# (.+)$/gm, '<h1 class="md-h1">$1</h1>');
 
-    // Bold and italic
     html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
 
-    // Checkbox lists
     html = html.replace(/^- \[x\] (.+)$/gm, '<li class="md-li md-check done">$1</li>');
     html = html.replace(/^- \[ \] (.+)$/gm, '<li class="md-li md-check">$1</li>');
 
-    // Unordered lists
     html = html.replace(/^- (.+)$/gm, '<li class="md-li">$1</li>');
     html = html.replace(/((?:<li class="md-li[^"]*">.*<\/li>\n?)+)/g, '<ul class="md-ul">$1</ul>');
 
-    // Ordered lists
     html = html.replace(/^\d+\. (.+)$/gm, '<li class="md-oli">$1</li>');
     html = html.replace(/((?:<li class="md-oli">.*<\/li>\n?)+)/g, '<ol class="md-ol">$1</ol>');
 
-    // Horizontal rule
     html = html.replace(/^---$/gm, '<hr class="md-hr">');
 
-    // Paragraphs (double newlines)
     html = html.replace(/\n\n/g, '</p><p class="md-p">');
     html = '<p class="md-p">' + html + '</p>';
     html = html.replace(/<p class="md-p">\s*<\/p>/g, '');
@@ -343,25 +455,204 @@ function renderMarkdown(text) {
     return html;
 }
 
-// ── Left Panel Modules ───────────────────────────────
+// ── Command Palette ─────────────────────────────────
 
-function renderModules(sops) {
-    modeBar.innerHTML = "";
-    for (const sop of sops) {
-        const btn = document.createElement("button");
-        btn.className = "module-btn";
-        btn.innerHTML = `<span class="module-icon">${sop.icon}</span><span class="module-label">${escapeHtml(sop.label)}</span>`;
-        btn.title = sop.description;
-        btn.addEventListener("click", () => {
-            if (streaming) return;
-            btn.classList.add("running");
-            setModulesDisabled(true);
-            btn.disabled = false;
-            runSop(sop.key);
+function openPalette() {
+    paletteOverlay.style.display = "flex";
+    paletteSearch.value = "";
+    paletteSelectedIdx = 0;
+    renderPaletteItems("");
+    setTimeout(() => paletteSearch.focus(), 50);
+}
+
+function closePalette() {
+    paletteOverlay.style.display = "none";
+    chatInput.focus();
+}
+
+function getPaletteItems(filter) {
+    const items = [];
+
+    for (const sop of sopList) {
+        items.push({
+            type: "sop", icon: sop.icon, label: sop.label,
+            desc: sop.description, key: sop.key,
         });
-        modeBar.appendChild(btn);
+    }
+
+    items.push({ type: "action", icon: "📂", label: "Browse Files", desc: "Open notebook file browser", action: "browse" });
+    items.push({ type: "action", icon: "🗂️", label: "History", desc: "Browse archived sessions", action: "history" });
+
+    if (!filter) return items;
+    const q = filter.toLowerCase();
+    return items.filter(i =>
+        i.label.toLowerCase().includes(q) ||
+        i.desc.toLowerCase().includes(q) ||
+        (i.key && i.key.toLowerCase().includes(q))
+    );
+}
+
+function renderPaletteItems(filter) {
+    const items = getPaletteItems(filter);
+    paletteSelectedIdx = Math.min(paletteSelectedIdx, Math.max(0, items.length - 1));
+
+    paletteList.innerHTML = "";
+    if (items.length === 0) {
+        paletteList.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-lo);font-size:0.8em">No matching operations</div>';
+        return;
+    }
+
+    items.forEach((item, i) => {
+        const el = document.createElement("div");
+        el.className = "palette-item" + (i === paletteSelectedIdx ? " selected" : "");
+        el.innerHTML = `
+            <span class="palette-item-icon">${item.icon}</span>
+            <div class="palette-item-body">
+                <div class="palette-item-label">${escapeHtml(item.label)}</div>
+                <div class="palette-item-desc">${escapeHtml(item.desc)}</div>
+            </div>
+        `;
+        el.addEventListener("click", () => executePaletteItem(item));
+        el.addEventListener("mouseenter", () => {
+            paletteSelectedIdx = i;
+            paletteList.querySelectorAll(".palette-item").forEach((p, j) => {
+                p.classList.toggle("selected", j === i);
+            });
+        });
+        paletteList.appendChild(el);
+    });
+}
+
+function executePaletteItem(item) {
+    closePalette();
+    if (item.type === "sop") {
+        runSop(item.key);
+    } else if (item.action === "history") {
+        openSessions();
+    } else if (item.action === "browse") {
+        openFileBrowser();
     }
 }
+
+paletteSearch.addEventListener("input", () => {
+    paletteSelectedIdx = 0;
+    renderPaletteItems(paletteSearch.value);
+});
+
+paletteSearch.addEventListener("keydown", (e) => {
+    const items = getPaletteItems(paletteSearch.value);
+    if (e.key === "ArrowDown") {
+        e.preventDefault();
+        paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
+        renderPaletteItems(paletteSearch.value);
+    } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
+        renderPaletteItems(paletteSearch.value);
+    } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (items[paletteSelectedIdx]) executePaletteItem(items[paletteSelectedIdx]);
+    } else if (e.key === "Escape") {
+        closePalette();
+    }
+});
+
+paletteOverlay.addEventListener("click", (e) => {
+    if (e.target === paletteOverlay) closePalette();
+});
+
+if (paletteHint) paletteHint.addEventListener("click", openPalette);
+
+// ── File Browser ─────────────────────────────────────
+
+const fileViewerModal = document.getElementById("modal-file-viewer");
+const fileViewerTitle = document.getElementById("file-viewer-title");
+const fileViewerBody = document.getElementById("file-viewer-body");
+const fileViewerBack = document.getElementById("file-viewer-back");
+const fileViewerClose = document.getElementById("file-viewer-close");
+
+let fileBrowserHistory = [];
+
+function openFileBrowser(path) {
+    const relPath = path || "";
+    fileViewerModal.style.display = "flex";
+    fileViewerTitle.textContent = relPath || "NOTEBOOK";
+    fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
+    fileViewerBack.style.display = fileBrowserHistory.length > 0 ? "" : "none";
+
+    fetch(`/api/files?path=${encodeURIComponent(relPath)}`).then(r => r.json()).then(items => {
+        if (items.error) {
+            fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">${escapeHtml(items.error)}</div>`;
+            return;
+        }
+        if (items.length === 0) {
+            fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Empty directory</div>';
+            return;
+        }
+        fileViewerBody.innerHTML = "";
+        for (const item of items) {
+            const el = document.createElement("div");
+            el.className = "file-item" + (item.type === "dir" ? " dir" : "");
+            el.innerHTML = `
+                <span class="file-item-icon">${item.type === "dir" ? "📁" : "📄"}</span>
+                <span class="file-item-name">${escapeHtml(item.name)}</span>
+            `;
+            el.addEventListener("click", () => {
+                if (item.type === "dir") {
+                    fileBrowserHistory.push(relPath);
+                    openFileBrowser(item.path);
+                } else {
+                    openFileViewer(item.path);
+                }
+            });
+            fileViewerBody.appendChild(el);
+        }
+    }).catch(e => {
+        fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
+function openFileViewer(path) {
+    fileViewerTitle.textContent = path.split("/").pop();
+    fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
+    fileViewerBack.style.display = "";
+
+    // Push current browse state so back works
+    const prevPath = fileBrowserHistory.length > 0 ? fileBrowserHistory[fileBrowserHistory.length - 1] : "";
+    const dirPath = path.includes("/") ? path.substring(0, path.lastIndexOf("/")) : "";
+    if (fileBrowserHistory[fileBrowserHistory.length - 1] !== dirPath) {
+        fileBrowserHistory.push(dirPath);
+    }
+
+    fetch(`/api/files/read?path=${encodeURIComponent(path)}`).then(r => r.json()).then(result => {
+        if (result.error) {
+            fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">${escapeHtml(result.error)}</div>`;
+            return;
+        }
+        fileViewerBody.innerHTML = `<div class="file-viewer-content">${renderMarkdown(result.content)}</div>`;
+    }).catch(e => {
+        fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
+fileViewerBack.addEventListener("click", () => {
+    if (fileBrowserHistory.length > 0) {
+        const prev = fileBrowserHistory.pop();
+        openFileBrowser(prev);
+    }
+});
+
+fileViewerClose.addEventListener("click", () => {
+    fileViewerModal.style.display = "none";
+    fileBrowserHistory = [];
+});
+
+fileViewerModal.addEventListener("click", (e) => {
+    if (e.target === fileViewerModal) {
+        fileViewerModal.style.display = "none";
+        fileBrowserHistory = [];
+    }
+});
 
 // ── Actions ──────────────────────────────────────────
 
@@ -371,8 +662,8 @@ function sendMessage(text) {
 
     const imagePaths = pendingImages.filter(i => i.path).map(i => i.path);
     addMessage("user", text, imagePaths);
-    setStatus("PROCESSING...", "online");
-    setAvatar("active");
+    setStatus("PROCESSING", "online");
+    setAvatar("thinking");
     setIndicator("TRANSMITTING...");
 
     ws.send(JSON.stringify({ type: "message", text, image_paths: imagePaths }));
@@ -470,8 +761,22 @@ chatInput.addEventListener("keydown", (e) => {
     }
 });
 
+// Ctrl+K — Command Palette
+document.addEventListener("keydown", (e) => {
+    if ((e.ctrlKey || e.metaKey) && e.key === "k") {
+        e.preventDefault();
+        if (paletteOverlay.style.display === "none") openPalette();
+        else closePalette();
+    }
+    if (e.key === "Escape") {
+        if (paletteOverlay.style.display !== "none") closePalette();
+    }
+});
+
 // Paste
 document.addEventListener("paste", (e) => {
+    if (paletteOverlay.style.display !== "none") return;
+    if (fileViewerModal.style.display !== "none") return;
     const items = e.clipboardData?.items;
     if (!items) return;
     const files = [];
@@ -512,12 +817,10 @@ const btnSessions = document.getElementById("btn-sessions");
 const modalSessions = document.getElementById("modal-sessions");
 const sessionsList = document.getElementById("sessions-list");
 
-btnSessions.addEventListener("click", async () => {
+function openSessions() {
     modalSessions.style.display = "flex";
     sessionsList.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
-    try {
-        const resp = await fetch("/api/sessions");
-        const sessions = await resp.json();
+    fetch("/api/sessions").then(r => r.json()).then(sessions => {
         if (sessions.length === 0) {
             sessionsList.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">No archived sessions</div>';
             return;
@@ -531,10 +834,12 @@ btnSessions.addEventListener("click", async () => {
         sessionsList.querySelectorAll(".session-item").forEach(el => {
             el.addEventListener("click", () => loadSessionDetail(el.dataset.id));
         });
-    } catch (e) {
+    }).catch(e => {
         sessionsList.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${e.message}</div>`;
-    }
-});
+    });
+}
+
+btnSessions.addEventListener("click", openSessions);
 
 async function loadSessionDetail(sessionId) {
     try {
@@ -552,7 +857,6 @@ async function loadSessionDetail(sessionId) {
     }
 }
 
-// Modal close
 document.getElementById("modal-close-btn").addEventListener("click", () => {
     modalSessions.style.display = "none";
 });

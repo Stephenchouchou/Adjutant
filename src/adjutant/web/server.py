@@ -142,6 +142,33 @@ def create_app(
             "notebook_root": str(config.notebook_root),
         }
 
+    @app.get("/api/stats")
+    async def get_stats():
+        from adjutant.core.file_ops import get_notebook_stats
+        return get_notebook_stats(config.notebook_root)
+
+    @app.get("/api/files")
+    async def list_files(path: str = ""):
+        from adjutant.core.file_ops import list_directory, FileOutsideRootError
+        try:
+            return list_directory(config.notebook_root, path)
+        except (FileNotFoundError, FileOutsideRootError) as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=400)
+
+    @app.get("/api/files/read")
+    async def read_file_api(path: str = ""):
+        from adjutant.core.file_ops import read_file, FileOutsideRootError, FileTooLargeError
+        if not path:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "path required"}, status_code=400)
+        try:
+            content = read_file(config.notebook_root / path, config.notebook_root)
+            return {"path": path, "content": content}
+        except (FileNotFoundError, FileOutsideRootError, FileTooLargeError) as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=400)
+
     # ── WebSocket chat ────────────────────────────────────
 
     @app.websocket("/ws")
@@ -167,10 +194,13 @@ def create_app(
             {"key": s.key, "label": s.label, "icon": s.icon, "description": s.description}
             for s in store.list_sops()
         ]
+        from adjutant.core.file_ops import get_notebook_stats
+        stats = get_notebook_stats(config.notebook_root)
         if not await _safe_send(websocket, {
             "type": "init",
             "sops": sops,
             "ai_tool": config.ai_tool,
+            "stats": stats,
         }):
             logger.warning("Client gone before init")
             active_connections.discard(conn_id)
