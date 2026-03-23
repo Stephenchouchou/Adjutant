@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Adjutant — Briefing Room</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="briefing-room">
+        <!-- Adjutant Portrait -->
+        <div class="adjutant-portrait" id="adjutant-portrait">
+            <div class="portrait-frame">
+                <div class="portrait-corner tl"></div>
+                <div class="portrait-corner tr"></div>
+                <div class="portrait-corner bl"></div>
+                <div class="portrait-corner br"></div>
+                <div class="portrait-avatar" style="background-image:url('/static/portrait-adjutant.png')"></div>
+            </div>
+            <div class="portrait-label">ADJUTANT</div>
+        </div>
+
+        <!-- Toolbar: SOP Mode Bar + History -->
+        <div class="toolbar">
+            <div class="mode-bar" id="mode-bar"></div>
+            <button class="cmd-btn" id="btn-sessions" type="button">History</button>
+        </div>
+
+        <!-- Central Briefing Panel -->
+        <div class="briefing-panel">
+            <div class="panel-frame">
+                <div class="panel-corner tl"></div>
+                <div class="panel-corner tr"></div>
+                <div class="panel-corner bl"></div>
+                <div class="panel-corner br"></div>
+                <div class="briefing-text" id="briefing-text">
+                    <div class="welcome">
+                        <div class="welcome-title">ADJUTANT</div>
+                        <div class="welcome-sub">Personal Knowledge Management</div>
+                        <div class="welcome-hint">Type a message or select an SOP to begin</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Bar -->
+        <div class="bottom-bar">
+            <!-- Status Panel -->
+            <div class="status-panel">
+                <div class="panel-frame small">
+                    <div class="panel-corner tl"></div>
+                    <div class="panel-corner tr"></div>
+                    <div class="panel-corner bl"></div>
+                    <div class="panel-corner br"></div>
+                    <div class="status-title">STATUS</div>
+                    <div class="status-content">
+                        <span id="status-text">AWAITING ORDERS</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Command Input -->
+            <div class="command-panel">
+                <div class="panel-frame small">
+                    <div class="panel-corner tl"></div>
+                    <div class="panel-corner tr"></div>
+                    <div class="panel-corner bl"></div>
+                    <div class="panel-corner br"></div>
+                    <form id="chat-form" class="command-form">
+                        <div id="image-bar" class="image-bar"></div>
+                        <textarea id="chat-input" class="command-input"
+                               placeholder="Enter your message..."
+                               autocomplete="off" autofocus rows="1"></textarea>
+                        <div class="command-buttons">
+                            <button type="submit" class="cmd-btn transmit" id="btn-send">Transmit</button>
+                            <button type="button" class="cmd-btn danger" id="btn-cancel" style="display:none">Stop</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Session History Modal -->
+    <div id="modal-sessions" class="modal-overlay" style="display:none">
+        <div class="modal-panel panel-frame">
+            <div class="panel-corner tl"></div>
+            <div class="panel-corner tr"></div>
+            <div class="panel-corner bl"></div>
+            <div class="panel-corner br"></div>
+            <div class="modal-header">
+                <span class="modal-title">BRIEFING HISTORY</span>
+                <button class="cmd-btn modal-close" data-modal="modal-sessions">Close</button>
+            </div>
+            <div class="modal-body" id="sessions-list"></div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
