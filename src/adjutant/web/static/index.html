@@ -8,22 +8,10 @@
 </head>
 <body>
     <div class="briefing-room">
-        <!-- Adjutant Portrait -->
-        <div class="adjutant-portrait" id="adjutant-portrait">
-            <div class="portrait-frame">
-                <div class="portrait-corner tl"></div>
-                <div class="portrait-corner tr"></div>
-                <div class="portrait-corner bl"></div>
-                <div class="portrait-corner br"></div>
-                <div class="portrait-avatar" style="background-image:url('/static/portrait-adjutant.png')"></div>
-            </div>
-            <div class="portrait-label">ADJUTANT</div>
-        </div>
-
         <!-- Toolbar: SOP Mode Bar + History -->
         <div class="toolbar">
             <div class="mode-bar" id="mode-bar"></div>
-            <button class="cmd-btn" id="btn-sessions" type="button">History</button>
+            <button class="mode-pill" id="btn-sessions" type="button">📂 History</button>
         </div>
 
         <!-- Central Briefing Panel -->
@@ -45,6 +33,17 @@
 
         <!-- Bottom Bar -->
         <div class="bottom-bar">
+            <!-- Adjutant Portrait (bottom-left) -->
+            <div class="adjutant-portrait" id="adjutant-portrait">
+                <div class="portrait-frame">
+                    <div class="portrait-corner tl"></div>
+                    <div class="portrait-corner tr"></div>
+                    <div class="portrait-corner bl"></div>
+                    <div class="portrait-corner br"></div>
+                    <div class="portrait-avatar" style="background-image:url('/static/portrait-adjutant.png')"></div>
+                </div>
+            </div>
+
             <!-- Status Panel -->
             <div class="status-panel">
                 <div class="panel-frame small">

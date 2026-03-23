@@ -1,7 +1,7 @@
 ---
 key: inbox-triage
 label: Inbox Triage
-icon: "\U0001F4E5"
+icon: 📥
 description: 分類 inbox 項目為 task/note/project/someday
 files:
   - "inbox.md"

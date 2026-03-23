@@ -1,7 +1,7 @@
 ---
 key: task-update
 label: Task Update
-icon: "\U00002705"
+icon: ✅
 description: 掃描任務清單，找出 stale/blocked 項目並建議 next actions
 files:
   - "tasks.md"

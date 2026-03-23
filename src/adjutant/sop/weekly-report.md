@@ -1,7 +1,7 @@
 ---
 key: weekly-report
 label: Weekly Report
-icon: "\U0001F4CA"
+icon: 📊
 description: 彙整近 7 天 daily notes 產出週報草稿
 files:
   - "journal/daily/*.md"

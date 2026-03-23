@@ -1,7 +1,7 @@
 ---
 key: daily-summary
 label: Daily Summary
-icon: "\U0001F4CB"
+icon: 📋
 description: 根據今日 daily note 產出結構化日報
 files:
   - "journal/daily/{today}.md"
