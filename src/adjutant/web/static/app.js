@@ -232,7 +232,50 @@ function handleMessage(msg) {
             finishEntry();
             setStatus("READY", "online");
             break;
+
+        case "bot_message":
+            addBotFeedMessage(msg.role, msg.source, msg.text);
+            break;
     }
+}
+
+function addBotFeedMessage(role, source, text) {
+    clearWelcome();
+    const tag = source === "telegram" ? "TG" : "BOT";
+
+    if (role === "system") {
+        addSysMsg(`[${tag}] ${text}`);
+        refreshStats();
+        return;
+    }
+
+    const isUser = role === "user";
+    const msg_el = document.createElement("div");
+    msg_el.className = `msg ${isUser ? "commander" : "adjutant"} bot-origin`;
+
+    const header = document.createElement("div");
+    header.className = "msg-header";
+
+    const sender = document.createElement("span");
+    sender.className = "msg-sender";
+    sender.textContent = isUser ? `COMMANDER [${tag}]` : `ADJUTANT [${tag}]`;
+
+    const time = document.createElement("span");
+    time.className = "msg-time";
+    time.textContent = `[${timestamp()}]`;
+
+    header.appendChild(sender);
+    header.appendChild(time);
+    msg_el.appendChild(header);
+
+    const body = document.createElement("div");
+    body.className = "msg-body";
+    body.innerHTML = renderMarkdown(text);
+    msg_el.appendChild(body);
+
+    feed.appendChild(msg_el);
+    scrollToBottom();
+    refreshStats();
 }
 
 // ── UI State ─────────────────────────────────────────
@@ -482,6 +525,7 @@ function getPaletteItems(filter) {
 
     items.push({ type: "action", icon: "📂", label: "Browse Files", desc: "Open notebook file browser", action: "browse" });
     items.push({ type: "action", icon: "🗂️", label: "History", desc: "Browse archived sessions", action: "history" });
+    items.push({ type: "action", icon: "🤖", label: "Telegram Bot", desc: "Setup and manage Telegram bot", action: "bot-setup" });
 
     if (!filter) return items;
     const q = filter.toLowerCase();
@@ -531,6 +575,9 @@ function executePaletteItem(item) {
         openSessions();
     } else if (item.action === "browse") {
         openFileBrowser();
+    } else if (item.action === "bot-setup") {
+        botSetupModal.style.display = "flex";
+        fetchBotStatus();
     }
 }
 
@@ -865,7 +912,150 @@ modalSessions.addEventListener("click", (e) => {
     if (e.target === modalSessions) modalSessions.style.display = "none";
 });
 
+// ── Bot Management ───────────────────────────────────
+
+const botStatusBlock = document.getElementById("bot-status-block");
+const botStatusDot = document.getElementById("bot-status-dot");
+const botSetupModal = document.getElementById("modal-bot-setup");
+const botTokenInput = document.getElementById("bot-token-input");
+const botTokenSave = document.getElementById("bot-token-save");
+const botSetupMsg = document.getElementById("bot-setup-msg");
+const botSetupStatus = document.getElementById("bot-setup-status");
+const botBtnStart = document.getElementById("bot-btn-start");
+const botBtnStop = document.getElementById("bot-btn-stop");
+const botSetupClose = document.getElementById("bot-setup-close");
+
+let botState = { has_token: false, running: false };
+
+function updateBotStatusDot() {
+    botStatusDot.className = "bot-status-dot";
+    if (botState.running) {
+        botStatusDot.classList.add("connected");
+    } else if (botState.has_token) {
+        botStatusDot.classList.add("disconnected");
+    } else {
+        botStatusDot.classList.add("no-token");
+    }
+}
+
+function updateBotSetupUI() {
+    if (botState.running) {
+        botSetupStatus.textContent = "CONNECTED";
+        botSetupStatus.className = "bot-setup-status-value running";
+        botBtnStart.style.display = "none";
+        botBtnStop.style.display = "";
+    } else if (botState.has_token) {
+        botSetupStatus.textContent = "STOPPED";
+        botSetupStatus.className = "bot-setup-status-value stopped";
+        botBtnStart.style.display = "";
+        botBtnStop.style.display = "none";
+    } else {
+        botSetupStatus.textContent = "NO TOKEN";
+        botSetupStatus.className = "bot-setup-status-value no-token";
+        botBtnStart.style.display = "none";
+        botBtnStop.style.display = "none";
+    }
+}
+
+async function fetchBotStatus() {
+    try {
+        const r = await fetch("/api/bot/status");
+        botState = await r.json();
+        updateBotStatusDot();
+        updateBotSetupUI();
+    } catch { /* ignore */ }
+}
+
+botStatusBlock.addEventListener("click", () => {
+    botSetupModal.style.display = "flex";
+    botSetupMsg.textContent = "";
+    botSetupMsg.className = "bot-setup-msg";
+    fetchBotStatus();
+});
+
+botSetupClose.addEventListener("click", () => { botSetupModal.style.display = "none"; });
+botSetupModal.addEventListener("click", (e) => { if (e.target === botSetupModal) botSetupModal.style.display = "none"; });
+
+botTokenSave.addEventListener("click", async () => {
+    const token = botTokenInput.value.trim();
+    if (!token) {
+        botSetupMsg.textContent = "Please enter a token";
+        botSetupMsg.className = "bot-setup-msg error";
+        return;
+    }
+    botTokenSave.disabled = true;
+    try {
+        const r = await fetch("/api/bot/setup", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ token }),
+        });
+        const result = await r.json();
+        if (r.ok) {
+            botSetupMsg.textContent = "Token saved successfully";
+            botSetupMsg.className = "bot-setup-msg success";
+            botTokenInput.value = "";
+            await fetchBotStatus();
+        } else {
+            botSetupMsg.textContent = result.error || "Failed";
+            botSetupMsg.className = "bot-setup-msg error";
+        }
+    } catch (e) {
+        botSetupMsg.textContent = "Error: " + e.message;
+        botSetupMsg.className = "bot-setup-msg error";
+    } finally {
+        botTokenSave.disabled = false;
+    }
+});
+
+botBtnStart.addEventListener("click", async () => {
+    botBtnStart.disabled = true;
+    botSetupMsg.textContent = "";
+    try {
+        const r = await fetch("/api/bot/start", { method: "POST" });
+        const result = await r.json();
+        if (r.ok) {
+            botSetupMsg.textContent = "Bot started";
+            botSetupMsg.className = "bot-setup-msg success";
+        } else {
+            botSetupMsg.textContent = result.error || "Failed to start";
+            botSetupMsg.className = "bot-setup-msg error";
+        }
+        await fetchBotStatus();
+    } catch (e) {
+        botSetupMsg.textContent = "Error: " + e.message;
+        botSetupMsg.className = "bot-setup-msg error";
+    } finally {
+        botBtnStart.disabled = false;
+    }
+});
+
+botBtnStop.addEventListener("click", async () => {
+    botBtnStop.disabled = true;
+    try {
+        const r = await fetch("/api/bot/stop", { method: "POST" });
+        const result = await r.json();
+        if (r.ok) {
+            botSetupMsg.textContent = "Bot stopped";
+            botSetupMsg.className = "bot-setup-msg success";
+        } else {
+            botSetupMsg.textContent = result.error || "Failed to stop";
+            botSetupMsg.className = "bot-setup-msg error";
+        }
+        await fetchBotStatus();
+    } catch (e) {
+        botSetupMsg.textContent = "Error: " + e.message;
+        botSetupMsg.className = "bot-setup-msg error";
+    } finally {
+        botBtnStop.disabled = false;
+    }
+});
+
+// Poll bot status every 10s
+setInterval(fetchBotStatus, 10000);
+
 // ── Init ─────────────────────────────────────────────
 
 setAvatar("idle");
 connect();
+fetchBotStatus();

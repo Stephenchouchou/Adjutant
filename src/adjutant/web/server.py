@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel as PydanticBaseModel
 
-from adjutant.config import AdjutantConfig, load_config
+from adjutant.config import AdjutantConfig, load_config, load_bot_token, save_bot_token
 from adjutant.core.chat import build_chat_prompt
 from adjutant.core.dispatcher import Dispatcher
 from adjutant.core.sop import SOPStore, build_sop_prompt
@@ -24,6 +24,10 @@ from adjutant.models.session import Session
 class ImageUpload(PydanticBaseModel):
     data: str  # base64-encoded image
     filename: str = ""
+
+
+class TokenPayload(PydanticBaseModel):
+    token: str
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +55,7 @@ def create_app(
     if config is None:
         raise RuntimeError("Adjutant not configured. Run 'adjutant init' first.")
 
-    active_connections: set[int] = set()
+    active_connections: dict[int, WebSocket] = {}
     shutdown_task: asyncio.Task | None = None
     SHUTDOWN_GRACE_SECONDS = 5
 
@@ -59,6 +63,15 @@ def create_app(
         await asyncio.sleep(SHUTDOWN_GRACE_SECONDS)
         if not active_connections:
             os.kill(os.getpid(), signal.SIGINT)
+
+    async def broadcast(data: dict) -> None:
+        """Send a message to all connected WebSocket clients."""
+        dead = []
+        for conn_id, ws in active_connections.items():
+            if not await _safe_send(ws, data):
+                dead.append(conn_id)
+        for conn_id in dead:
+            active_connections.pop(conn_id, None)
 
     # ── Static files & index ──────────────────────────────
 
@@ -169,6 +182,87 @@ def create_app(
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": str(e)}, status_code=400)
 
+    # ── Bot Management ─────────────────────────────────────
+
+    bot_instance = None
+
+    @app.get("/api/bot/status")
+    async def bot_status():
+        token = load_bot_token()
+        has_token = bool(token)
+        running = bot_instance is not None and bot_instance.running
+        return {
+            "has_token": has_token,
+            "running": running,
+            "platform": config.bot.platform,
+        }
+
+    @app.post("/api/bot/setup")
+    async def bot_setup(payload: TokenPayload):
+        token = payload.token.strip()
+        if not token:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "Token is required"}, status_code=400)
+        save_bot_token(token)
+        return {"ok": True, "message": "Token saved"}
+
+    @app.post("/api/bot/start")
+    async def bot_start():
+        nonlocal bot_instance
+        from fastapi.responses import JSONResponse
+
+        # Stop existing instance first to avoid Conflict errors
+        if bot_instance:
+            try:
+                await bot_instance.stop()
+            except Exception:
+                pass
+            bot_instance = None
+
+        token = load_bot_token()
+        if not token:
+            return JSONResponse({"error": "No bot token configured"}, status_code=400)
+
+        try:
+            from adjutant.bot.telegram import AdjutantTelegramBot
+        except ImportError:
+            return JSONResponse(
+                {"error": "python-telegram-bot not installed. Run: pip install 'adjutant[bot]'"},
+                status_code=400,
+            )
+
+        bot_instance = AdjutantTelegramBot(config, token)
+        bot_instance.set_ai_handler(
+            dispatcher_factory=Dispatcher,
+            broadcast=broadcast,
+            ai_tool=config.ai_tool,
+            ai_model=config.ai_model or None,
+        )
+        try:
+            await bot_instance.start_background()
+        except Exception as e:
+            bot_instance = None
+            logger.exception("Bot start failed: %s", e)
+            return JSONResponse({"error": f"Bot start failed: {e}"}, status_code=500)
+
+        return {"ok": True, "message": "Bot started"}
+
+    @app.post("/api/bot/stop")
+    async def bot_stop():
+        nonlocal bot_instance
+        if bot_instance and bot_instance.running:
+            await bot_instance.stop()
+            bot_instance = None
+            return {"ok": True, "message": "Bot stopped"}
+        return {"ok": True, "message": "Bot not running"}
+
+    @app.on_event("shutdown")
+    async def _shutdown_bot():
+        nonlocal bot_instance
+        if bot_instance and bot_instance.running:
+            await bot_instance.stop()
+            bot_instance = None
+
     # ── WebSocket chat ────────────────────────────────────
 
     @app.websocket("/ws")
@@ -177,7 +271,7 @@ def create_app(
 
         await websocket.accept()
         conn_id = id(websocket)
-        active_connections.add(conn_id)
+        active_connections[conn_id] = websocket
         logger.info("WebSocket client connected (id=%s)", conn_id)
 
         if shutdown_task is not None and not shutdown_task.done():
@@ -203,7 +297,7 @@ def create_app(
             "stats": stats,
         }):
             logger.warning("Client gone before init")
-            active_connections.discard(conn_id)
+            active_connections.pop(conn_id, None)
             return
 
         connected = True
@@ -326,7 +420,7 @@ def create_app(
             logger.exception("WebSocket error")
         finally:
             await dispatcher.cleanup()
-            active_connections.discard(conn_id)
+            active_connections.pop(conn_id, None)
 
             if session.messages:
                 session.save()

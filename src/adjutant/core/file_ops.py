@@ -223,6 +223,18 @@ def get_notebook_stats(root: Path) -> dict:
     return stats
 
 
+def append_to_file(path: Path, content: str, root: Path) -> None:
+    """Append content to a file safely (within root).
+
+    Uses open('a') for atomic single-line appends, avoiding
+    read-modify-write race conditions with concurrent writers.
+    """
+    safe_path = resolve_safe(path, root)
+    safe_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(safe_path, "a", encoding="utf-8") as f:
+        f.write(content)
+
+
 def write_file(path: Path, content: str, root: Path) -> None:
     """Write content to a file safely (within root)."""
     safe_path = resolve_safe(path, root)

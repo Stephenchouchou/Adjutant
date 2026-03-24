@@ -42,6 +42,11 @@
                     <span class="stat-label">NOTES</span>
                 </div>
                 <div class="top-bar-sep"></div>
+                <div class="bot-status-block" id="bot-status-block" title="Telegram Bot">
+                    <span class="bot-status-dot" id="bot-status-dot"></span>
+                    <span class="bot-status-label">BOT</span>
+                </div>
+                <div class="top-bar-sep"></div>
                 <div class="status-block">
                     <span class="status-dot" id="status-dot"></span>
                     <span class="status-value" id="status-text">INIT</span>
@@ -137,6 +142,53 @@
                 <button class="action-btn mini" id="modal-close-btn" data-modal="modal-sessions">CLOSE</button>
             </div>
             <div class="modal-body" id="sessions-list"></div>
+        </div>
+    </div>
+
+    <!-- ═══ BOT SETUP MODAL ═══ -->
+    <div id="modal-bot-setup" class="modal-overlay" style="display:none">
+        <div class="modal-panel">
+            <div class="modal-header">
+                <span class="modal-title">TELEGRAM BOT SETUP</span>
+                <button class="action-btn mini" id="bot-setup-close">CLOSE</button>
+            </div>
+            <div class="modal-body" id="bot-setup-body">
+                <div class="bot-setup-content">
+                    <div class="bot-setup-step">
+                        <div class="bot-setup-step-num">1</div>
+                        <div class="bot-setup-step-text">
+                            Open Telegram, find <strong>@BotFather</strong>, send <code>/newbot</code>
+                        </div>
+                    </div>
+                    <div class="bot-setup-step">
+                        <div class="bot-setup-step-num">2</div>
+                        <div class="bot-setup-step-text">
+                            Follow the prompts to create your bot and copy the token
+                        </div>
+                    </div>
+                    <div class="bot-setup-step">
+                        <div class="bot-setup-step-num">3</div>
+                        <div class="bot-setup-step-text">Paste the token below:</div>
+                    </div>
+                    <div class="bot-setup-token-row">
+                        <input type="text" class="bot-setup-token-input" id="bot-token-input"
+                            placeholder="123456:ABC-DEF1234ghIkl-zyx57W2v..." autocomplete="off">
+                        <button class="action-btn execute" id="bot-token-save">SAVE</button>
+                    </div>
+                    <div class="bot-setup-msg" id="bot-setup-msg"></div>
+                    <div class="bot-setup-divider"></div>
+                    <div class="bot-setup-actions">
+                        <div class="bot-setup-status-row">
+                            <span class="bot-setup-status-label">Status:</span>
+                            <span class="bot-setup-status-value" id="bot-setup-status">CHECKING...</span>
+                        </div>
+                        <div class="bot-setup-buttons">
+                            <button class="action-btn execute" id="bot-btn-start" style="display:none">START BOT</button>
+                            <button class="action-btn abort" id="bot-btn-stop" style="display:none">STOP BOT</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
 

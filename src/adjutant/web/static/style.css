@@ -675,6 +675,11 @@ body {
     max-width: 100%;
 }
 
+/* Bot-origin messages (from Telegram) */
+.msg.bot-origin.commander { border-right-color: rgba(0, 200, 255, 0.3); }
+.msg.bot-origin.adjutant  { border-left-color: rgba(0, 200, 255, 0.3); }
+.msg.bot-origin .msg-sender { opacity: 0.85; }
+
 /* System messages */
 .sys-msg {
     text-align: center;
@@ -1172,6 +1177,179 @@ em { color: #90CAF9; font-style: italic; }
 .session-meta { color: var(--text-lo); font-size: 0.7em; letter-spacing: 1px; }
 
 /* ════════════════════════════════════════════════════
+   BOT STATUS & SETUP
+   ════════════════════════════════════════════════════ */
+
+.bot-status-block {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 3px;
+    cursor: pointer;
+    transition: background 0.15s;
+    font-size: 0.7em;
+}
+
+.bot-status-block:hover { background: var(--primary-ghost); }
+
+.bot-status-dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: var(--text-lo);
+    transition: all 0.3s;
+}
+
+.bot-status-dot.connected {
+    background: var(--success);
+    box-shadow: 0 0 8px rgba(0,255,136,0.6);
+    animation: botPulse 2s ease-in-out infinite;
+}
+
+.bot-status-dot.disconnected {
+    background: var(--text-lo);
+}
+
+.bot-status-dot.no-token {
+    background: var(--accent);
+    box-shadow: 0 0 4px var(--accent-glow);
+}
+
+@keyframes botPulse {
+    0%, 100% { box-shadow: 0 0 4px rgba(0,255,136,0.3); }
+    50%      { box-shadow: 0 0 10px rgba(0,255,136,0.6); }
+}
+
+.bot-status-label {
+    font-family: var(--font-display);
+    font-size: 0.75em;
+    font-weight: 600;
+    color: var(--text-lo);
+    letter-spacing: 1px;
+}
+
+/* Bot Setup Modal */
+.bot-setup-content {
+    padding: 20px;
+}
+
+.bot-setup-step {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 14px;
+}
+
+.bot-setup-step-num {
+    width: 24px; height: 24px;
+    border-radius: 50%;
+    border: 1px solid var(--primary-dim);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-display);
+    font-size: 0.6em;
+    font-weight: 700;
+    color: var(--primary);
+    flex-shrink: 0;
+}
+
+.bot-setup-step-text {
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    color: var(--text-hi);
+    line-height: 1.6;
+    padding-top: 2px;
+}
+
+.bot-setup-step-text code {
+    background: rgba(0, 229, 255, 0.06);
+    border: 1px solid rgba(0, 229, 255, 0.12);
+    border-radius: 2px;
+    padding: 1px 5px;
+    color: var(--primary);
+    font-size: 0.95em;
+}
+
+.bot-setup-step-text strong { color: var(--primary); }
+
+.bot-setup-token-row {
+    display: flex;
+    gap: 10px;
+    margin: 16px 0 8px;
+}
+
+.bot-setup-token-input {
+    flex: 1;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    padding: 10px 14px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.bot-setup-token-input:focus {
+    border-color: var(--primary-dim);
+    box-shadow: 0 0 8px var(--primary-ghost);
+}
+
+.bot-setup-token-input::placeholder { color: var(--text-lo); opacity: 0.4; }
+
+.bot-setup-msg {
+    font-family: var(--font-mono);
+    font-size: 0.75em;
+    min-height: 1.5em;
+    padding: 4px 0;
+}
+
+.bot-setup-msg.success { color: var(--success); }
+.bot-setup-msg.error { color: var(--danger); }
+
+.bot-setup-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 16px 0;
+}
+
+.bot-setup-actions {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.bot-setup-status-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.bot-setup-status-label {
+    font-family: var(--font-display);
+    font-size: 0.6em;
+    font-weight: 600;
+    color: var(--text-lo);
+    letter-spacing: 2px;
+}
+
+.bot-setup-status-value {
+    font-family: var(--font-mono);
+    font-size: 0.8em;
+    letter-spacing: 1px;
+}
+
+.bot-setup-status-value.running { color: var(--success); text-shadow: 0 0 6px rgba(0,255,136,0.4); }
+.bot-setup-status-value.stopped { color: var(--text-lo); }
+.bot-setup-status-value.no-token { color: var(--accent); }
+
+.bot-setup-buttons {
+    display: flex;
+    gap: 8px;
+}
+
+/* ════════════════════════════════════════════════════
    RESPONSIVE
    ════════════════════════════════════════════════════ */
 
@@ -1180,6 +1358,7 @@ em { color: #90CAF9; font-style: italic; }
     .ai-avatar { width: 44px; height: 44px; }
     .avatar-img { width: 38px; height: 38px; }
     .stat-block { display: none; }
+    .bot-status-block { display: none; }
     .top-bar-sep { display: none; }
     .clock-block { display: none; }
     .palette-hint { display: none; }

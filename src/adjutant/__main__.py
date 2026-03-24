@@ -501,5 +501,46 @@ def web(port: int, host: str, no_open: bool):
     uvicorn.run(app, host=host, port=port, ws_ping_interval=None, ws_ping_timeout=None)
 
 
+# ── bot ───────────────────────────────────────────────────────
+
+
+@cli.command()
+@click.option("--platform", "-p", default=None, help="Override platform (telegram/line)")
+def bot(platform: str | None):
+    """Start the chat bot daemon (Telegram / Line)."""
+    import logging
+    import os
+
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    config = _require_config()
+    token = os.environ.get("ADJUTANT_BOT_TOKEN")
+    if not token:
+        console.print("[red]Error:[/red] ADJUTANT_BOT_TOKEN environment variable not set.")
+        console.print("Set it with: export ADJUTANT_BOT_TOKEN=your_token_here")
+        sys.exit(1)
+
+    plat = platform or config.bot.platform
+    if plat == "telegram":
+        try:
+            from adjutant.bot.telegram import AdjutantTelegramBot
+        except ImportError:
+            console.print("[red]Error:[/red] python-telegram-bot not installed.")
+            console.print("Install with: pip install 'adjutant[bot]'")
+            sys.exit(1)
+
+        console.print("[bold]Adjutant Telegram Bot[/bold] — starting polling...")
+        if config.bot.allowed_chat_ids:
+            console.print(f"Authorized chat IDs: {config.bot.allowed_chat_ids}")
+        else:
+            console.print("[yellow]Warning:[/yellow] No allowed_chat_ids set — accepting all chats (check logs for your chat ID)")
+
+        tg = AdjutantTelegramBot(config, token)
+        asyncio.run(tg.run())
+    else:
+        console.print(f"[red]Unsupported platform:[/red] {plat}")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
     cli()
