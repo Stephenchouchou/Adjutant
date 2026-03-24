@@ -1,89 +1,65 @@
-"""AI CLI dispatcher — streaming subprocess execution.
+"""AI dispatcher — routes requests to the appropriate backend.
 
-Simplified from CrossVal's dispatcher for single-AI mode.
+Supports subprocess-based CLI tools (claude, gemini, codex) and HTTP backends (ollama).
 """
 
 from __future__ import annotations
 
-import asyncio
-import shutil
 from collections.abc import AsyncIterator
 from pathlib import Path
+from typing import Any
+
+from adjutant.core.backends.subprocess_backend import AI_BINARIES, SubprocessBackend
+
+# Lazy-loaded to avoid hard dependency on httpx at import time
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
 
 
 class AINotFoundError(Exception):
-    """Raised when the requested AI CLI tool is not installed."""
-
-
-AI_BINARIES = {
-    "claude": "claude",
-    "gemini": "gemini",
-    "codex": "codex",
-}
+    """Raised when the requested AI backend is not available."""
 
 
 class Dispatcher:
-    """Run AI CLI subprocess with streaming output."""
+    """Route AI requests to the appropriate backend with streaming output."""
 
-    def __init__(self) -> None:
-        self._active_procs: list[asyncio.subprocess.Process] = []
-        self._cancelled = False
+    def __init__(self, ollama_base_url: str = DEFAULT_OLLAMA_URL) -> None:
+        self._ollama_base_url = ollama_base_url
+        self._active_backend: Any = None
 
-    async def cancel(self) -> None:
-        """Cancel the current streaming response."""
-        self._cancelled = True
-        for proc in list(self._active_procs):
-            if proc.returncode is None:
-                try:
-                    proc.terminate()
-                    await asyncio.wait_for(proc.wait(), timeout=3)
-                except (TimeoutError, ProcessLookupError):
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
-        self._active_procs.clear()
+    def _get_backend(self, ai_tool: str, work_dir: Path):
+        if ai_tool == "ollama":
+            from adjutant.core.backends.ollama import OllamaBackend
 
-    async def cleanup(self) -> None:
-        """Terminate and wait for all active subprocesses."""
-        await self.cancel()
-
-    @staticmethod
-    def build_command(
-        ai_tool: str, prompt: str, work_dir: Path, model: str | None = None
-    ) -> list[str]:
-        """Build the command list for the given AI tool."""
-        if ai_tool == "codex":
-            cmd = ["codex", "-C", str(work_dir)]
-            if model:
-                cmd.extend(["-m", model])
-            cmd.extend(["exec", prompt])
-            return cmd
-        elif ai_tool == "claude":
-            cmd = ["claude", "-p", "--dangerously-skip-permissions"]
-            if model:
-                cmd.extend(["--model", model])
-            cmd.append(prompt)
-            return cmd
-        elif ai_tool == "gemini":
-            cmd = ["gemini", "-p", prompt]
-            if model:
-                cmd.extend(["--model", model])
-            return cmd
+            backend = OllamaBackend(self._ollama_base_url)
+        elif ai_tool in AI_BINARIES:
+            backend = SubprocessBackend(ai_tool, work_dir)
         else:
             msg = f"Unknown AI tool: {ai_tool}"
             raise ValueError(msg)
+        self._active_backend = backend
+        return backend
 
-    @staticmethod
-    def get_cwd(ai_tool: str, work_dir: Path) -> Path | None:
-        """Return the cwd to use when spawning the subprocess."""
-        if ai_tool == "codex":
-            return None
-        return work_dir
+    async def cancel(self) -> None:
+        """Cancel the current streaming response."""
+        if self._active_backend:
+            await self._active_backend.cancel()
+
+    async def cleanup(self) -> None:
+        """Terminate and clean up all active backends."""
+        await self.cancel()
+        if hasattr(self._active_backend, "close"):
+            await self._active_backend.close()
+        self._active_backend = None
 
     @staticmethod
     def check_available(ai_tool: str) -> bool:
-        """Check if the AI CLI binary is installed."""
+        """Check if an AI tool is available (sync check for subprocess tools)."""
+        import shutil
+
+        if ai_tool == "ollama":
+            # For ollama, a sync availability check isn't meaningful.
+            # Use async check_available() on the backend instead.
+            return True
         binary = AI_BINARIES.get(ai_tool)
         if not binary:
             return False
@@ -92,44 +68,16 @@ class Dispatcher:
     async def run(
         self, ai_tool: str, prompt: str, work_dir: Path, model: str | None = None
     ) -> AsyncIterator[str]:
-        """Launch AI CLI subprocess and yield stdout lines as they arrive."""
-        self._cancelled = False
+        """Route to the appropriate backend and stream the response."""
+        backend = self._get_backend(ai_tool, work_dir)
 
-        if not self.check_available(ai_tool):
+        if not await backend.check_available():
+            if ai_tool == "ollama":
+                raise AINotFoundError(
+                    f"Cannot connect to Ollama at {self._ollama_base_url}. Is it running?"
+                )
             binary = AI_BINARIES.get(ai_tool, ai_tool)
             raise AINotFoundError(f"'{binary}' not found in PATH. Install it first.")
 
-        cmd = self.build_command(ai_tool, prompt, work_dir, model=model)
-        cwd = self.get_cwd(ai_tool, work_dir)
-
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=cwd,
-        )
-        self._active_procs.append(proc)
-
-        assert proc.stdout is not None  # noqa: S101
-
-        try:
-            assert proc.stderr is not None  # noqa: S101
-            stderr_task = asyncio.create_task(proc.stderr.read())
-
-            async for raw_line in proc.stdout:
-                if self._cancelled:
-                    break
-                line = raw_line.decode("utf-8", errors="replace")
-                yield line
-
-            stderr_data = await stderr_task
-            await proc.wait()
-
-            if not self._cancelled and proc.returncode and proc.returncode != 0:
-                err_text = stderr_data.decode("utf-8", errors="replace").strip()
-                if err_text:
-                    yield f"\n[Error from {ai_tool}]: {err_text}\n"
-        finally:
-            if proc in self._active_procs:
-                self._active_procs.remove(proc)
-
+        async for chunk in backend.run(prompt, model=model):
+            yield chunk

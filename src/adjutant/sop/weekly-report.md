@@ -1,11 +1,18 @@
 ---
 key: weekly-report
+version: "2"
 label: Weekly Report
 icon: 📊
 description: 彙整近 7 天 daily notes 產出週報草稿
+author: adjutant-builtin
+tags: [weekly, report, review]
 files:
   - "journal/daily/*.md"
 output: stdout
+tools: [read_file]
+constraints:
+  - "用 markdown 格式輸出，適合直接貼到週報系統"
+  - "只彙整近 7 天的內容"
 ---
 
 你是 Adjutant，指揮官的知識管理副官。以下是指揮官過去一週的 daily notes：

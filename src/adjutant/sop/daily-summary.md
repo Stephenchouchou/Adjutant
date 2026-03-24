@@ -1,11 +1,22 @@
 ---
 key: daily-summary
+version: "2"
 label: Daily Summary
 icon: 📋
 description: 根據今日 daily note 產出結構化日報
+author: adjutant-builtin
+tags: [daily, summary, review]
+inputs:
+  - name: date
+    type: date
+    default: "{today}"
+    description: 要彙整的日期
 files:
   - "journal/daily/{today}.md"
 output: stdout
+tools: [read_file]
+constraints:
+  - "保持簡潔，每個項目用一行描述"
 ---
 
 你是 Adjutant，指揮官的知識管理副官。以下是指揮官今天（{today}）的 daily note：

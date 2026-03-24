@@ -41,6 +41,11 @@
                     <span class="stat-value" id="stat-notes">—</span>
                     <span class="stat-label">NOTES</span>
                 </div>
+                <div class="stat-block stat-block-index" id="stat-index-block" title="RAG Index — Click to build">
+                    <span class="stat-icon">🧠</span>
+                    <span class="stat-value" id="stat-index">—</span>
+                    <span class="stat-label">INDEX</span>
+                </div>
                 <div class="top-bar-sep"></div>
                 <div class="bot-status-block" id="bot-status-block" title="Telegram Bot">
                     <span class="bot-status-dot" id="bot-status-dot"></span>
@@ -94,12 +99,14 @@
         <!-- ═══ BOTTOM INPUT ═══ -->
         <footer class="bottom-bar">
             <div id="image-bar" class="image-bar"></div>
+            <div id="file-attach-bar" class="file-attach-bar"></div>
             <form id="chat-form" class="command-line">
                 <span class="prompt-symbol">&gt;</span>
                 <textarea id="chat-input" class="command-input"
                     placeholder="Enter directive... (Ctrl+K for operations)"
                     autocomplete="off" autofocus rows="1"></textarea>
                 <div class="command-actions">
+                    <button type="button" class="action-btn mini" id="btn-attach" title="Attach notebook file">📎</button>
                     <button type="submit" class="action-btn execute" id="btn-send">EXECUTE</button>
                     <button type="button" class="action-btn abort" id="btn-cancel" style="display:none">ABORT</button>
                 </div>
@@ -166,19 +173,175 @@
         </div>
     </div>
 
-    <!-- ═══ MEMORY EDITOR MODAL ═══ -->
+    <!-- ═══ MEMORY MANAGEMENT MODAL ═══ -->
     <div id="modal-memory" class="modal-overlay" style="display:none">
         <div class="modal-panel modal-panel-wide">
             <div class="modal-header">
                 <span class="modal-title">ADJUTANT MEMORY</span>
-                <button class="action-btn mini" id="memory-close">CLOSE</button>
+                <div class="modal-header-actions">
+                    <div class="memory-tab-bar">
+                        <button class="memory-tab active" data-tab="vector">VECTOR</button>
+                        <button class="memory-tab" data-tab="flat">FLAT FILE</button>
+                    </div>
+                    <button class="action-btn mini" id="memory-close">CLOSE</button>
+                </div>
             </div>
             <div class="modal-body" style="padding:16px">
-                <div class="editor-hint">副官的長期記憶。跨對話、跨模型共享。記錄指揮官偏好、專案背景、重要決策等。</div>
-                <textarea class="editor-textarea" id="memory-editor" rows="16" placeholder="記錄副官需要記住的事情..."></textarea>
+                <!-- Vector Memory Tab -->
+                <div id="memory-tab-vector" class="memory-tab-content active">
+                    <div class="editor-hint">向量記憶庫 — 語意檢索，只注入相關記憶。</div>
+                    <div class="memory-add-row">
+                        <input type="text" class="memory-add-input" id="memory-add-input"
+                            placeholder="新增記憶..." autocomplete="off">
+                        <select class="memory-category-select" id="memory-add-category">
+                            <option value="fact">fact</option>
+                            <option value="preference">preference</option>
+                            <option value="instruction">instruction</option>
+                            <option value="context">context</option>
+                        </select>
+                        <button class="action-btn execute mini" id="memory-add-btn">ADD</button>
+                    </div>
+                    <div class="memory-search-row">
+                        <input type="text" class="memory-add-input" id="memory-search-input"
+                            placeholder="語意搜尋記憶..." autocomplete="off">
+                        <button class="action-btn mini" id="memory-search-btn">SEARCH</button>
+                        <button class="action-btn mini" id="memory-import-btn" title="Import from memory.md">IMPORT</button>
+                    </div>
+                    <div class="memory-filter-row">
+                        <span class="memory-count" id="memory-count">—</span>
+                        <select class="memory-category-select" id="memory-filter-category">
+                            <option value="">All</option>
+                            <option value="fact">fact</option>
+                            <option value="preference">preference</option>
+                            <option value="instruction">instruction</option>
+                            <option value="context">context</option>
+                        </select>
+                    </div>
+                    <div class="memory-entries-list" id="memory-entries-list"></div>
+                    <span class="editor-msg" id="memory-vector-msg"></span>
+                </div>
+                <!-- Flat File Tab -->
+                <div id="memory-tab-flat" class="memory-tab-content">
+                    <div class="editor-hint">平文字記憶檔 (~/.adjutant/memory.md) — 全文注入每次對話。</div>
+                    <textarea class="editor-textarea" id="memory-editor" rows="16" placeholder="記錄副官需要記住的事情..."></textarea>
+                    <div class="editor-actions">
+                        <span class="editor-msg" id="memory-msg"></span>
+                        <button class="action-btn execute" id="memory-save">SAVE</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ SEARCH MODAL ═══ -->
+    <div id="modal-search" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wide">
+            <div class="modal-header">
+                <span class="modal-title">NOTEBOOK SEARCH</span>
+                <button class="action-btn mini" id="search-close">CLOSE</button>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="search-input-row">
+                    <input type="text" class="search-query-input" id="search-query-input"
+                        placeholder="語意搜尋筆記..." autocomplete="off">
+                    <button class="action-btn execute mini" id="search-btn">SEARCH</button>
+                </div>
+                <div class="search-status" id="search-status"></div>
+                <div class="search-results" id="search-results"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ SOP INPUT MODAL ═══ -->
+    <div id="modal-sop-input" class="modal-overlay" style="display:none">
+        <div class="modal-panel">
+            <div class="modal-header">
+                <span class="modal-title" id="sop-input-title">SOP PARAMETERS</span>
+                <button class="action-btn mini" id="sop-input-close">CLOSE</button>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="editor-hint" id="sop-input-hint"></div>
+                <div id="sop-input-fields"></div>
                 <div class="editor-actions">
-                    <span class="editor-msg" id="memory-msg"></span>
-                    <button class="action-btn execute" id="memory-save">SAVE</button>
+                    <button class="action-btn execute" id="sop-input-run">EXECUTE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ DIRECTIVES MODAL ═══ -->
+    <div id="modal-directives" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wide">
+            <div class="modal-header">
+                <span class="modal-title">DIRECTIVES</span>
+                <button class="action-btn mini" id="directives-close">CLOSE</button>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="editor-hint">觸發指令 — 訊息包含關鍵字時自動注入 prompt。</div>
+                <div class="directive-add-row">
+                    <input type="text" class="directive-input" id="directive-add-trigger" placeholder="trigger keyword" autocomplete="off">
+                    <input type="text" class="directive-input directive-input-name" id="directive-add-filename" placeholder="filename" autocomplete="off">
+                    <button class="action-btn execute mini" id="directive-add-btn">ADD</button>
+                </div>
+                <textarea class="editor-textarea" id="directive-add-body" rows="4" placeholder="Prompt body to inject..."></textarea>
+                <div class="directive-list" id="directive-list"></div>
+                <span class="editor-msg" id="directive-msg"></span>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ SETTINGS MODAL ═══ -->
+    <div id="modal-settings" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wide">
+            <div class="modal-header">
+                <span class="modal-title">SETTINGS</span>
+                <button class="action-btn mini" id="settings-close">CLOSE</button>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="settings-group">
+                    <div class="settings-group-title">GENERAL</div>
+                    <div class="settings-row">
+                        <label class="settings-label">Notebook Root</label>
+                        <input type="text" class="settings-input" id="settings-notebook-root" readonly>
+                    </div>
+                    <div class="settings-row">
+                        <label class="settings-label">Ollama URL</label>
+                        <input type="text" class="settings-input" id="settings-ollama-url" placeholder="http://localhost:11434">
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-group-title">NOTEBOOK PATHS</div>
+                    <div class="settings-row">
+                        <label class="settings-label">Inbox</label>
+                        <input type="text" class="settings-input" id="settings-inbox">
+                    </div>
+                    <div class="settings-row">
+                        <label class="settings-label">Tasks</label>
+                        <input type="text" class="settings-input" id="settings-tasks">
+                    </div>
+                    <div class="settings-row">
+                        <label class="settings-label">Daily Dir</label>
+                        <input type="text" class="settings-input" id="settings-daily-dir">
+                    </div>
+                    <div class="settings-row">
+                        <label class="settings-label">Projects Dir</label>
+                        <input type="text" class="settings-input" id="settings-projects-dir">
+                    </div>
+                    <div class="settings-row">
+                        <label class="settings-label">Assets Dir</label>
+                        <input type="text" class="settings-input" id="settings-assets-dir">
+                    </div>
+                </div>
+                <div class="settings-group">
+                    <div class="settings-group-title">BOT</div>
+                    <div class="settings-row">
+                        <label class="settings-label">Allowed Chat IDs</label>
+                        <input type="text" class="settings-input" id="settings-bot-ids" placeholder="comma-separated IDs (empty = all)">
+                    </div>
+                </div>
+                <div class="editor-actions">
+                    <span class="editor-msg" id="settings-msg"></span>
+                    <button class="action-btn execute" id="settings-save">SAVE</button>
                 </div>
             </div>
         </div>

@@ -23,6 +23,8 @@ const statTasks = document.getElementById("stat-tasks");
 const statDaily = document.getElementById("stat-daily");
 const statNotes = document.getElementById("stat-notes");
 
+const statIndex = document.getElementById("stat-index");
+
 let ws = null;
 let streaming = false;
 let currentContent = null;
@@ -131,6 +133,54 @@ function refreshStats() {
     fetch("/api/stats").then(r => r.json()).then(updateStats).catch(() => {});
 }
 
+let indexBuilding = false;
+
+function refreshIndexStatus() {
+    fetch("/api/index/status").then(r => r.json()).then(data => {
+        if (data.built) {
+            statIndex.textContent = data.chunk_count;
+            statIndex.className = "stat-value good";
+            statIndex.title = `${data.file_count} files, ${data.chunk_count} chunks\nLast built: ${data.last_built}\nClick to rebuild`;
+        } else {
+            statIndex.textContent = "NONE";
+            statIndex.className = "stat-value warn";
+            statIndex.title = "Index not built — click to build";
+        }
+    }).catch(() => {
+        statIndex.textContent = "—";
+    });
+}
+
+async function buildIndex() {
+    if (indexBuilding) return;
+    indexBuilding = true;
+    statIndex.textContent = "BUILD";
+    statIndex.className = "stat-value blink";
+    addSysMsg("INDEX BUILD STARTED — scanning notebook...");
+    try {
+        const r = await fetch("/api/index/build", { method: "POST" });
+        const data = await r.json();
+        if (r.ok) {
+            addSysMsg(`INDEX BUILD COMPLETE — ${data.file_count} files, ${data.chunk_count} chunks`);
+            refreshIndexStatus();
+        } else {
+            addErrorMsg(`INDEX BUILD FAILED: ${data.error}`);
+            refreshIndexStatus();
+        }
+    } catch (e) {
+        addErrorMsg(`INDEX BUILD ERROR: ${e.message}`);
+        refreshIndexStatus();
+    } finally {
+        indexBuilding = false;
+    }
+}
+
+// INDEX stat block click to build
+document.getElementById("stat-index-block").addEventListener("click", (e) => {
+    e.stopPropagation();
+    if (!indexBuilding) buildIndex();
+});
+
 // ── WebSocket ────────────────────────────────────────
 
 function connect() {
@@ -203,7 +253,7 @@ function handleMessage(msg) {
             break;
 
         case "sop_file_confirm":
-            showFileConfirm(msg.path, msg.content);
+            showFileConfirm(msg.path, msg.content, msg.existing || "");
             break;
 
         case "file_written":
@@ -231,6 +281,23 @@ function handleMessage(msg) {
             }
             finishEntry();
             setStatus("READY", "online");
+            break;
+
+        case "sop_input_request":
+            showSopInputModal(msg);
+            break;
+
+        case "sop_step":
+            addSysMsg(`── 步驟 ${msg.step}/${msg.total}: ${msg.name} ──`);
+            break;
+
+        case "session_loaded":
+            feed.innerHTML = "";
+            addSysMsg(`SESSION RESUMED: ${msg.id}`);
+            for (const m of msg.messages) {
+                addMessage(m.role === "user" ? "user" : "adjutant", m.content, null, true);
+            }
+            addSysMsg("── 繼續對話 ──");
             break;
 
         case "bot_message":
@@ -408,13 +475,22 @@ function addErrorMsg(text) {
     scrollToBottom();
 }
 
-function showFileConfirm(path, content) {
+function showFileConfirm(path, content, existing) {
     const bar = document.createElement("div");
     bar.className = "file-confirm";
+    let diffHtml = "";
+    if (existing) {
+        diffHtml = `<div class="file-diff"><div class="file-diff-label">EXISTING FILE — ${escapeHtml(path)}</div><pre class="file-diff-content">${escapeHtml(existing.substring(0, 500))}${existing.length > 500 ? "\n..." : ""}</pre></div>`;
+    } else {
+        diffHtml = `<div class="file-diff"><div class="file-diff-label">NEW FILE</div></div>`;
+    }
     bar.innerHTML = `
-        <span>Write output to <strong>${escapeHtml(path)}</strong>?</span>
-        <button class="action-btn execute mini">WRITE</button>
-        <button class="action-btn mini">SKIP</button>
+        ${diffHtml}
+        <div class="file-confirm-actions">
+            <span>Write output to <strong>${escapeHtml(path)}</strong>?</span>
+            <button class="action-btn execute mini">WRITE</button>
+            <button class="action-btn mini">SKIP</button>
+        </div>
     `;
     feed.appendChild(bar);
     scrollToBottom();
@@ -517,17 +593,29 @@ function getPaletteItems(filter) {
     const items = [];
 
     for (const sop of sopList) {
+        let desc = sop.description;
+        if (sop.is_v2) {
+            const badges = [];
+            if (sop.tags && sop.tags.length) badges.push(sop.tags.join(", "));
+            if (sop.is_multistep) badges.push("multi-step");
+            if (sop.has_inputs) badges.push("inputs");
+            if (badges.length) desc += ` [${badges.join(" · ")}]`;
+        }
         items.push({
             type: "sop", icon: sop.icon, label: sop.label,
-            desc: sop.description, key: sop.key,
+            desc, key: sop.key,
         });
     }
 
+    items.push({ type: "action", icon: "🔍", label: "Search Notes", desc: "Semantic search across notebook (RAG)", action: "search" });
+    items.push({ type: "action", icon: "🧠", label: "Build Index", desc: "Build/rebuild RAG vector index", action: "build-index" });
     items.push({ type: "action", icon: "📂", label: "Browse Files", desc: "Open notebook file browser", action: "browse" });
     items.push({ type: "action", icon: "🗂️", label: "History", desc: "Browse archived sessions", action: "history" });
-    items.push({ type: "action", icon: "🧠", label: "Persona", desc: "Edit adjutant personality and mission", action: "persona" });
-    items.push({ type: "action", icon: "💾", label: "Memory", desc: "Edit adjutant persistent memory", action: "memory" });
+    items.push({ type: "action", icon: "👤", label: "Persona", desc: "Edit adjutant personality and mission", action: "persona" });
+    items.push({ type: "action", icon: "💾", label: "Memory", desc: "Manage vector and flat-file memory", action: "memory" });
+    items.push({ type: "action", icon: "⚡", label: "Directives", desc: "Manage trigger-keyword prompt injection", action: "directives" });
     items.push({ type: "action", icon: "⚙️", label: "Model", desc: "Switch AI tool and model", action: "model" });
+    items.push({ type: "action", icon: "🔧", label: "Settings", desc: "Configure paths, Ollama URL, bot settings", action: "settings" });
     items.push({ type: "action", icon: "🤖", label: "Telegram Bot", desc: "Setup and manage Telegram bot", action: "bot-setup" });
 
     if (!filter) return items;
@@ -574,6 +662,10 @@ function executePaletteItem(item) {
     closePalette();
     if (item.type === "sop") {
         runSop(item.key);
+    } else if (item.action === "search") {
+        openSearchModal();
+    } else if (item.action === "build-index") {
+        buildIndex();
     } else if (item.action === "history") {
         openSessions();
     } else if (item.action === "browse") {
@@ -582,6 +674,10 @@ function executePaletteItem(item) {
         openPersonaEditor();
     } else if (item.action === "memory") {
         openMemoryEditor();
+    } else if (item.action === "directives") {
+        openDirectives();
+    } else if (item.action === "settings") {
+        openSettings();
     } else if (item.action === "model") {
         openModelSelector();
     } else if (item.action === "bot-setup") {
@@ -669,6 +765,7 @@ function openFileBrowser(path) {
 }
 
 function openFileViewer(path) {
+    fileViewerModal.style.display = "flex";
     fileViewerTitle.textContent = path.split("/").pop();
     fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
     fileViewerBack.style.display = "";
@@ -712,19 +809,25 @@ fileViewerModal.addEventListener("click", (e) => {
 
 // ── Actions ──────────────────────────────────────────
 
+let attachedFiles = [];
+
 function sendMessage(text) {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     if (!text.trim() && pendingImages.length === 0) return;
 
     const imagePaths = pendingImages.filter(i => i.path).map(i => i.path);
-    addMessage("user", text, imagePaths);
+    const filePaths = attachedFiles.slice();
+    const allAttach = [...imagePaths, ...filePaths];
+    addMessage("user", text, allAttach.length > 0 ? allAttach : null);
     setStatus("PROCESSING", "online");
     setAvatar("thinking");
     setIndicator("TRANSMITTING...");
 
-    ws.send(JSON.stringify({ type: "message", text, image_paths: imagePaths }));
+    ws.send(JSON.stringify({ type: "message", text, image_paths: imagePaths, file_paths: filePaths }));
     pendingImages = [];
+    attachedFiles = [];
     renderImageBar();
+    renderFileAttachBar();
 }
 
 function runSop(key) {
@@ -897,22 +1000,6 @@ function openSessions() {
 
 btnSessions.addEventListener("click", openSessions);
 
-async function loadSessionDetail(sessionId) {
-    try {
-        const resp = await fetch(`/api/sessions/${sessionId}`);
-        const session = await resp.json();
-        modalSessions.style.display = "none";
-        feed.innerHTML = "";
-        addSysMsg(`ARCHIVE: ${session.name || "Unnamed"} -- ${new Date(session.created).toLocaleString()}`);
-        for (const msg of session.messages) {
-            addMessage(msg.role === "user" ? "user" : "adjutant", msg.content, null, true);
-        }
-        addSysMsg("-- END OF ARCHIVED SESSION --");
-    } catch (e) {
-        addErrorMsg(`Failed to load session: ${e.message}`);
-    }
-}
-
 document.getElementById("modal-close-btn").addEventListener("click", () => {
     modalSessions.style.display = "none";
 });
@@ -972,22 +1059,142 @@ personaReset.addEventListener("click", async () => {
 personaClose.addEventListener("click", () => { personaModal.style.display = "none"; });
 personaModal.addEventListener("click", (e) => { if (e.target === personaModal) personaModal.style.display = "none"; });
 
-// ── Memory Editor ────────────────────────────────────
+// ── Memory Management ────────────────────────────────
 
 const memoryModal = document.getElementById("modal-memory");
 const memoryEditor = document.getElementById("memory-editor");
 const memorySave = document.getElementById("memory-save");
 const memoryClose = document.getElementById("memory-close");
 const memoryMsg = document.getElementById("memory-msg");
+const memoryVectorMsg = document.getElementById("memory-vector-msg");
+const memoryAddInput = document.getElementById("memory-add-input");
+const memoryAddCategory = document.getElementById("memory-add-category");
+const memoryAddBtn = document.getElementById("memory-add-btn");
+const memoryFilterCategory = document.getElementById("memory-filter-category");
+const memoryEntriesList = document.getElementById("memory-entries-list");
+const memoryCount = document.getElementById("memory-count");
+
+// Tab switching
+document.querySelectorAll(".memory-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+        document.querySelectorAll(".memory-tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".memory-tab-content").forEach(c => c.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById("memory-tab-" + tab.dataset.tab).classList.add("active");
+        if (tab.dataset.tab === "flat") {
+            loadFlatMemory();
+        } else {
+            loadVectorMemories();
+        }
+    });
+});
 
 function openMemoryEditor() {
     memoryModal.style.display = "flex";
+    memoryVectorMsg.textContent = "";
+    memoryVectorMsg.className = "editor-msg";
     memoryMsg.textContent = "";
     memoryMsg.className = "editor-msg";
+    // Default to vector tab
+    document.querySelectorAll(".memory-tab").forEach(t => t.classList.toggle("active", t.dataset.tab === "vector"));
+    document.querySelectorAll(".memory-tab-content").forEach(c => c.classList.remove("active"));
+    document.getElementById("memory-tab-vector").classList.add("active");
+    loadVectorMemories();
+}
+
+function loadFlatMemory() {
     fetch("/api/memory").then(r => r.json()).then(data => {
         memoryEditor.value = data.content;
     });
 }
+
+async function loadVectorMemories() {
+    const cat = memoryFilterCategory.value;
+    const url = cat ? `/api/memory/entries?category=${encodeURIComponent(cat)}` : "/api/memory/entries";
+    memoryEntriesList.innerHTML = '<div class="memory-loading">Loading...</div>';
+    try {
+        const r = await fetch(url);
+        const data = await r.json();
+        if (data.error) {
+            memoryEntriesList.innerHTML = `<div class="memory-empty">${escapeHtml(data.error)}</div>`;
+            memoryCount.textContent = "Error";
+            return;
+        }
+        memoryCount.textContent = `${data.count} memories`;
+        if (data.entries.length === 0) {
+            memoryEntriesList.innerHTML = '<div class="memory-empty">No memories stored</div>';
+            return;
+        }
+        memoryEntriesList.innerHTML = "";
+        for (const entry of data.entries) {
+            const el = document.createElement("div");
+            el.className = "memory-entry";
+            el.innerHTML = `
+                <div class="memory-entry-header">
+                    <span class="memory-entry-category">${escapeHtml(entry.category)}</span>
+                    <span class="memory-entry-date">${new Date(entry.created).toLocaleDateString()}</span>
+                    <button class="memory-entry-delete" data-id="${escapeHtml(entry.id)}" title="Forget">&times;</button>
+                </div>
+                <div class="memory-entry-content">${escapeHtml(entry.content)}</div>
+            `;
+            el.querySelector(".memory-entry-delete").addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const id = e.target.dataset.id;
+                try {
+                    const resp = await fetch(`/api/memory/entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+                    if (resp.ok) {
+                        el.remove();
+                        memoryVectorMsg.textContent = "Memory forgotten";
+                        memoryVectorMsg.className = "editor-msg success";
+                        loadVectorMemories();
+                    }
+                } catch (err) {
+                    memoryVectorMsg.textContent = "Error: " + err.message;
+                    memoryVectorMsg.className = "editor-msg error";
+                }
+            });
+            memoryEntriesList.appendChild(el);
+        }
+    } catch (e) {
+        memoryEntriesList.innerHTML = `<div class="memory-empty">Unavailable — embedding provider not configured</div>`;
+        memoryCount.textContent = "—";
+    }
+}
+
+memoryAddBtn.addEventListener("click", async () => {
+    const content = memoryAddInput.value.trim();
+    if (!content) return;
+    memoryAddBtn.disabled = true;
+    memoryVectorMsg.textContent = "";
+    try {
+        const r = await fetch("/api/memory/entries", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content, category: memoryAddCategory.value }),
+        });
+        if (r.ok) {
+            memoryAddInput.value = "";
+            memoryVectorMsg.textContent = "Memory added";
+            memoryVectorMsg.className = "editor-msg success";
+            loadVectorMemories();
+        } else {
+            const data = await r.json();
+            memoryVectorMsg.textContent = data.error || "Failed";
+            memoryVectorMsg.className = "editor-msg error";
+        }
+    } catch (e) {
+        memoryVectorMsg.textContent = "Error: " + e.message;
+        memoryVectorMsg.className = "editor-msg error";
+    } finally {
+        memoryAddBtn.disabled = false;
+    }
+});
+
+memoryFilterCategory.addEventListener("change", loadVectorMemories);
+
+memoryAddInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); memoryAddBtn.click(); }
+});
 
 memorySave.addEventListener("click", async () => {
     try {
@@ -1008,6 +1215,79 @@ memorySave.addEventListener("click", async () => {
 
 memoryClose.addEventListener("click", () => { memoryModal.style.display = "none"; });
 memoryModal.addEventListener("click", (e) => { if (e.target === memoryModal) memoryModal.style.display = "none"; });
+
+// ── Search Modal ─────────────────────────────────────
+
+const searchModal = document.getElementById("modal-search");
+const searchQueryInput = document.getElementById("search-query-input");
+const searchBtn = document.getElementById("search-btn");
+const searchStatus = document.getElementById("search-status");
+const searchResults = document.getElementById("search-results");
+const searchClose = document.getElementById("search-close");
+
+function openSearchModal() {
+    searchModal.style.display = "flex";
+    searchStatus.textContent = "";
+    searchResults.innerHTML = "";
+    setTimeout(() => searchQueryInput.focus(), 50);
+}
+
+async function executeSearch() {
+    const q = searchQueryInput.value.trim();
+    if (!q) return;
+    searchBtn.disabled = true;
+    searchStatus.textContent = "Searching...";
+    searchStatus.className = "search-status";
+    searchResults.innerHTML = "";
+    try {
+        const r = await fetch(`/api/search?q=${encodeURIComponent(q)}&k=10`);
+        const data = await r.json();
+        if (data.error) {
+            searchStatus.textContent = data.error;
+            searchStatus.className = "search-status error";
+            return;
+        }
+        const results = data.results || [];
+        searchStatus.textContent = `${results.length} results`;
+        searchStatus.className = "search-status";
+        if (results.length === 0) {
+            searchResults.innerHTML = `<div class="search-empty">No matching notes found<br><button class="action-btn mini" style="margin-top:12px" onclick="document.getElementById('modal-search').style.display='none';buildIndex()">BUILD INDEX</button></div>`;
+            return;
+        }
+        searchResults.innerHTML = "";
+        for (const res of results) {
+            const el = document.createElement("div");
+            el.className = "search-result-item";
+            const scoreBar = Math.max(5, Math.min(100, (1 - res.score) * 100));
+            el.innerHTML = `
+                <div class="search-result-header">
+                    <span class="search-result-source">${escapeHtml(res.source)}</span>
+                    <span class="search-result-heading">${escapeHtml(res.heading || "")}</span>
+                    <div class="search-result-score-bar"><div class="search-result-score-fill" style="width:${scoreBar}%"></div></div>
+                </div>
+                <div class="search-result-text">${escapeHtml(res.text.substring(0, 300))}${res.text.length > 300 ? "..." : ""}</div>
+            `;
+            el.addEventListener("click", () => {
+                searchModal.style.display = "none";
+                openFileViewer(res.source);
+            });
+            searchResults.appendChild(el);
+        }
+    } catch (e) {
+        searchStatus.textContent = "Error: " + e.message;
+        searchStatus.className = "search-status error";
+    } finally {
+        searchBtn.disabled = false;
+    }
+}
+
+searchBtn.addEventListener("click", executeSearch);
+searchQueryInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); executeSearch(); }
+    if (e.key === "Escape") { searchModal.style.display = "none"; }
+});
+searchClose.addEventListener("click", () => { searchModal.style.display = "none"; });
+searchModal.addEventListener("click", (e) => { if (e.target === searchModal) searchModal.style.display = "none"; });
 
 // ── Model Selector ───────────────────────────────────
 
@@ -1221,8 +1501,368 @@ botBtnStop.addEventListener("click", async () => {
 // Poll bot status every 10s
 setInterval(fetchBotStatus, 10000);
 
+// ── Memory Search & Import ───────────────────────────
+
+const memorySearchInput = document.getElementById("memory-search-input");
+const memorySearchBtn = document.getElementById("memory-search-btn");
+const memoryImportBtn = document.getElementById("memory-import-btn");
+
+memorySearchBtn.addEventListener("click", async () => {
+    const q = memorySearchInput.value.trim();
+    if (!q) { loadVectorMemories(); return; }
+    memoryEntriesList.innerHTML = '<div class="memory-loading">Searching...</div>';
+    try {
+        const r = await fetch(`/api/memory/search?q=${encodeURIComponent(q)}&k=10`);
+        const data = await r.json();
+        if (data.error) {
+            memoryEntriesList.innerHTML = `<div class="memory-empty">${escapeHtml(data.error)}</div>`;
+            return;
+        }
+        memoryCount.textContent = `${data.entries.length} results`;
+        if (data.entries.length === 0) {
+            memoryEntriesList.innerHTML = '<div class="memory-empty">No matching memories</div>';
+            return;
+        }
+        memoryEntriesList.innerHTML = "";
+        for (const entry of data.entries) {
+            const el = document.createElement("div");
+            el.className = "memory-entry";
+            el.innerHTML = `
+                <div class="memory-entry-header">
+                    <span class="memory-entry-category">${escapeHtml(entry.category)}</span>
+                    <span class="memory-entry-date">${new Date(entry.created).toLocaleDateString()}</span>
+                    <button class="memory-entry-delete" data-id="${escapeHtml(entry.id)}" title="Forget">&times;</button>
+                </div>
+                <div class="memory-entry-content">${escapeHtml(entry.content)}</div>
+            `;
+            el.querySelector(".memory-entry-delete").addEventListener("click", async (e) => {
+                e.stopPropagation();
+                const id = e.target.dataset.id;
+                try {
+                    await fetch(`/api/memory/entries/${encodeURIComponent(id)}`, { method: "DELETE" });
+                    el.remove();
+                } catch {}
+            });
+            memoryEntriesList.appendChild(el);
+        }
+    } catch (e) {
+        memoryEntriesList.innerHTML = `<div class="memory-empty">Search failed: ${escapeHtml(e.message)}</div>`;
+    }
+});
+
+memorySearchInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); memorySearchBtn.click(); }
+});
+
+memoryImportBtn.addEventListener("click", async () => {
+    memoryImportBtn.disabled = true;
+    memoryVectorMsg.textContent = "Importing...";
+    memoryVectorMsg.className = "editor-msg";
+    try {
+        const r = await fetch("/api/memory/import", { method: "POST" });
+        const data = await r.json();
+        if (r.ok) {
+            memoryVectorMsg.textContent = `Imported ${data.imported} memories from memory.md`;
+            memoryVectorMsg.className = "editor-msg success";
+            loadVectorMemories();
+        } else {
+            memoryVectorMsg.textContent = data.error || "Import failed";
+            memoryVectorMsg.className = "editor-msg error";
+        }
+    } catch (e) {
+        memoryVectorMsg.textContent = "Error: " + e.message;
+        memoryVectorMsg.className = "editor-msg error";
+    } finally {
+        memoryImportBtn.disabled = false;
+    }
+});
+
+// ── SOP Input Modal ──────────────────────────────────
+
+const sopInputModal = document.getElementById("modal-sop-input");
+const sopInputTitle = document.getElementById("sop-input-title");
+const sopInputHint = document.getElementById("sop-input-hint");
+const sopInputFields = document.getElementById("sop-input-fields");
+const sopInputRun = document.getElementById("sop-input-run");
+const sopInputClose = document.getElementById("sop-input-close");
+
+let pendingSopKey = null;
+
+function showSopInputModal(msg) {
+    pendingSopKey = msg.key;
+    sopInputTitle.textContent = `${msg.icon} ${msg.label} — PARAMETERS`;
+    sopInputHint.textContent = `This SOP requires input parameters.`;
+    sopInputFields.innerHTML = "";
+    for (const inp of msg.inputs) {
+        const row = document.createElement("div");
+        row.className = "model-row";
+        const label = inp.description || inp.name;
+        const typeHint = inp.type !== "string" ? ` (${inp.type})` : "";
+        row.innerHTML = `
+            <label class="model-label">${escapeHtml(label)}${typeHint}</label>
+            <input type="text" class="settings-input" data-input-name="${escapeHtml(inp.name)}"
+                value="${escapeHtml(inp.default || "")}" placeholder="${escapeHtml(inp.name)}">
+        `;
+        sopInputFields.appendChild(row);
+    }
+    sopInputModal.style.display = "flex";
+    const firstInput = sopInputFields.querySelector("input");
+    if (firstInput) setTimeout(() => firstInput.focus(), 50);
+}
+
+sopInputRun.addEventListener("click", () => {
+    if (!pendingSopKey) return;
+    const inputs = {};
+    sopInputFields.querySelectorAll("[data-input-name]").forEach(el => {
+        inputs[el.dataset.inputName] = el.value;
+    });
+    sopInputModal.style.display = "none";
+    if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: "run_sop", key: pendingSopKey, inputs }));
+    }
+    pendingSopKey = null;
+});
+
+sopInputClose.addEventListener("click", () => { sopInputModal.style.display = "none"; pendingSopKey = null; });
+sopInputModal.addEventListener("click", (e) => { if (e.target === sopInputModal) { sopInputModal.style.display = "none"; pendingSopKey = null; } });
+
+// ── File Attachment ──────────────────────────────────
+
+const btnAttach = document.getElementById("btn-attach");
+const fileAttachBar = document.getElementById("file-attach-bar");
+
+function renderFileAttachBar() {
+    if (attachedFiles.length === 0) {
+        fileAttachBar.innerHTML = "";
+        fileAttachBar.classList.remove("active");
+        return;
+    }
+    fileAttachBar.classList.add("active");
+    fileAttachBar.innerHTML = attachedFiles.map((fp, i) =>
+        `<span class="image-tag">📎 ${escapeHtml(fp)} <span class="image-remove" data-file-idx="${i}">&times;</span></span>`
+    ).join("");
+    fileAttachBar.querySelectorAll(".image-remove").forEach(el => {
+        el.addEventListener("click", () => {
+            attachedFiles.splice(parseInt(el.dataset.fileIdx), 1);
+            renderFileAttachBar();
+        });
+    });
+}
+
+btnAttach.addEventListener("click", () => {
+    // Open file browser in selection mode
+    openFileBrowserForAttach();
+});
+
+function openFileBrowserForAttach(path) {
+    const relPath = path || "";
+    fileViewerModal.style.display = "flex";
+    fileViewerTitle.textContent = "ATTACH FILE — " + (relPath || "NOTEBOOK");
+    fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
+    fileViewerBack.style.display = fileBrowserHistory.length > 0 ? "" : "none";
+
+    fetch(`/api/files?path=${encodeURIComponent(relPath)}`).then(r => r.json()).then(items => {
+        if (items.error) {
+            fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">${escapeHtml(items.error)}</div>`;
+            return;
+        }
+        fileViewerBody.innerHTML = "";
+        for (const item of items) {
+            const el = document.createElement("div");
+            el.className = "file-item" + (item.type === "dir" ? " dir" : "");
+            el.innerHTML = `
+                <span class="file-item-icon">${item.type === "dir" ? "📁" : "📄"}</span>
+                <span class="file-item-name">${escapeHtml(item.name)}</span>
+            `;
+            el.addEventListener("click", () => {
+                if (item.type === "dir") {
+                    fileBrowserHistory.push(relPath);
+                    openFileBrowserForAttach(item.path);
+                } else {
+                    // Attach file
+                    if (!attachedFiles.includes(item.path)) {
+                        attachedFiles.push(item.path);
+                        renderFileAttachBar();
+                    }
+                    fileViewerModal.style.display = "none";
+                    fileBrowserHistory = [];
+                    chatInput.focus();
+                }
+            });
+            fileViewerBody.appendChild(el);
+        }
+    }).catch(e => {
+        fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${escapeHtml(e.message)}</div>`;
+    });
+}
+
+// ── Directives Manager ───────────────────────────────
+
+const directivesModal = document.getElementById("modal-directives");
+const directiveList = document.getElementById("directive-list");
+const directiveAddTrigger = document.getElementById("directive-add-trigger");
+const directiveAddFilename = document.getElementById("directive-add-filename");
+const directiveAddBody = document.getElementById("directive-add-body");
+const directiveAddBtn = document.getElementById("directive-add-btn");
+const directiveMsg = document.getElementById("directive-msg");
+const directivesClose = document.getElementById("directives-close");
+
+function openDirectives() {
+    directivesModal.style.display = "flex";
+    directiveMsg.textContent = "";
+    loadDirectives();
+}
+
+async function loadDirectives() {
+    directiveList.innerHTML = '<div class="memory-loading">Loading...</div>';
+    try {
+        const r = await fetch("/api/directives");
+        const data = await r.json();
+        directiveList.innerHTML = "";
+        if (data.directives.length === 0) {
+            directiveList.innerHTML = '<div class="memory-empty">No directives configured</div>';
+            return;
+        }
+        for (const d of data.directives) {
+            const el = document.createElement("div");
+            el.className = "memory-entry";
+            el.innerHTML = `
+                <div class="memory-entry-header">
+                    <span class="memory-entry-category">${escapeHtml(d.trigger)}</span>
+                    <span class="memory-entry-date">${d.is_user ? "user" : "built-in"}</span>
+                    ${d.is_user ? `<button class="memory-entry-delete" data-filename="${escapeHtml(d.filename)}" title="Delete">&times;</button>` : ""}
+                </div>
+                <div class="memory-entry-content">${escapeHtml(d.body.substring(0, 200))}${d.body.length > 200 ? "..." : ""}</div>
+            `;
+            if (d.is_user) {
+                el.querySelector(".memory-entry-delete").addEventListener("click", async (e) => {
+                    e.stopPropagation();
+                    try {
+                        await fetch(`/api/directives/${encodeURIComponent(e.target.dataset.filename)}`, { method: "DELETE" });
+                        el.remove();
+                        directiveMsg.textContent = "Directive deleted";
+                        directiveMsg.className = "editor-msg success";
+                    } catch (err) {
+                        directiveMsg.textContent = "Error: " + err.message;
+                        directiveMsg.className = "editor-msg error";
+                    }
+                });
+            }
+            directiveList.appendChild(el);
+        }
+    } catch (e) {
+        directiveList.innerHTML = `<div class="memory-empty">Error: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+directiveAddBtn.addEventListener("click", async () => {
+    const trigger = directiveAddTrigger.value.trim();
+    const filename = directiveAddFilename.value.trim() || trigger;
+    const body = directiveAddBody.value.trim();
+    if (!trigger || !body) {
+        directiveMsg.textContent = "Trigger and body are required";
+        directiveMsg.className = "editor-msg error";
+        return;
+    }
+    directiveAddBtn.disabled = true;
+    try {
+        const r = await fetch("/api/directives", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ filename, trigger, body }),
+        });
+        if (r.ok) {
+            directiveAddTrigger.value = "";
+            directiveAddFilename.value = "";
+            directiveAddBody.value = "";
+            directiveMsg.textContent = "Directive created";
+            directiveMsg.className = "editor-msg success";
+            loadDirectives();
+        } else {
+            const data = await r.json();
+            directiveMsg.textContent = data.error || "Failed";
+            directiveMsg.className = "editor-msg error";
+        }
+    } catch (e) {
+        directiveMsg.textContent = "Error: " + e.message;
+        directiveMsg.className = "editor-msg error";
+    } finally {
+        directiveAddBtn.disabled = false;
+    }
+});
+
+directivesClose.addEventListener("click", () => { directivesModal.style.display = "none"; });
+directivesModal.addEventListener("click", (e) => { if (e.target === directivesModal) directivesModal.style.display = "none"; });
+
+// ── Settings Panel ───────────────────────────────────
+
+const settingsModal = document.getElementById("modal-settings");
+const settingsClose = document.getElementById("settings-close");
+const settingsSave = document.getElementById("settings-save");
+const settingsMsg = document.getElementById("settings-msg");
+
+function openSettings() {
+    settingsModal.style.display = "flex";
+    settingsMsg.textContent = "";
+    fetch("/api/settings").then(r => r.json()).then(data => {
+        document.getElementById("settings-notebook-root").value = data.notebook_root || "";
+        document.getElementById("settings-ollama-url").value = data.ollama_base_url || "";
+        document.getElementById("settings-inbox").value = data.paths?.inbox || "";
+        document.getElementById("settings-tasks").value = data.paths?.tasks || "";
+        document.getElementById("settings-daily-dir").value = data.paths?.daily_dir || "";
+        document.getElementById("settings-projects-dir").value = data.paths?.projects_dir || "";
+        document.getElementById("settings-assets-dir").value = data.paths?.assets_dir || "";
+        document.getElementById("settings-bot-ids").value = (data.bot?.allowed_chat_ids || []).join(", ");
+    });
+}
+
+settingsSave.addEventListener("click", async () => {
+    const idsStr = document.getElementById("settings-bot-ids").value.trim();
+    const ids = idsStr ? idsStr.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+    try {
+        const r = await fetch("/api/settings", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ollama_base_url: document.getElementById("settings-ollama-url").value,
+                inbox: document.getElementById("settings-inbox").value,
+                tasks: document.getElementById("settings-tasks").value,
+                daily_dir: document.getElementById("settings-daily-dir").value,
+                projects_dir: document.getElementById("settings-projects-dir").value,
+                assets_dir: document.getElementById("settings-assets-dir").value,
+                bot_allowed_chat_ids: ids,
+            }),
+        });
+        if (r.ok) {
+            settingsMsg.textContent = "Settings saved";
+            settingsMsg.className = "editor-msg success";
+        }
+    } catch (e) {
+        settingsMsg.textContent = "Error: " + e.message;
+        settingsMsg.className = "editor-msg error";
+    }
+});
+
+settingsClose.addEventListener("click", () => { settingsModal.style.display = "none"; });
+settingsModal.addEventListener("click", (e) => { if (e.target === settingsModal) settingsModal.style.display = "none"; });
+
+// ── Session Resume ───────────────────────────────────
+
+async function loadSessionDetail(sessionId) {
+    try {
+        // Send resume request over WebSocket
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "load_session", session_id: sessionId }));
+            modalSessions.style.display = "none";
+        }
+    } catch (e) {
+        addErrorMsg(`Failed to load session: ${e.message}`);
+    }
+}
+
 // ── Init ─────────────────────────────────────────────
 
 setAvatar("idle");
 connect();
 fetchBotStatus();
+refreshIndexStatus();

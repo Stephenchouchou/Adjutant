@@ -26,14 +26,28 @@ def build_chat_prompt(
     user_prompt: str,
     session: Session,
     file_context: str | None = None,
+    rag_context: str | None = None,
+    memory_context: str | None = None,
 ) -> str:
-    """Build a full prompt including persona, memory, history, and optional file context."""
+    """Build a full prompt including persona, memory, RAG, history, and optional file context.
+
+    Args:
+        memory_context: Pre-fetched memory text (from vector store or flat file).
+            If None, falls back to loading flat memory.md directly.
+    """
     parts: list[str] = [get_persona()]
 
-    # Inject persistent memory
-    memory = load_memory()
-    if memory:
-        parts.append(f"\n## 副官記憶\n\n{memory}\n")
+    # Inject memory — prefer pre-fetched vector memory, fallback to flat file
+    if memory_context:
+        parts.append(f"\n{memory_context}\n")
+    else:
+        memory = load_memory()
+        if memory:
+            parts.append(f"\n## 副官記憶\n\n{memory}\n")
+
+    # Inject RAG context (semantically relevant notebook chunks)
+    if rag_context:
+        parts.append(f"\n{rag_context}\n")
 
     # Add conversation history (last 20 messages to keep prompt manageable)
     recent = session.messages[-20:]

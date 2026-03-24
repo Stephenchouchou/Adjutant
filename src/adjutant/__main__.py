@@ -175,7 +175,7 @@ def chat(prompt: tuple[str, ...], file: tuple[str, ...]):
 
     full_prompt = build_chat_prompt(user_prompt, session, file_context)
 
-    dispatcher = Dispatcher()
+    dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
     model = config.ai_model or None
 
     response = _run_async(
@@ -224,8 +224,32 @@ def _write_sop_output(sop, response: str, notebook_root: Path):
         console.print("[dim]Skipped file write.[/dim]")
 
 
+def _collect_sop_inputs(sop) -> dict[str, str]:
+    """Prompt user for any required SOP input parameters (v2)."""
+    from adjutant.core.sop import resolve_inputs
+
+    if not sop.inputs:
+        return {}
+
+    # Pre-fill defaults
+    resolved = resolve_inputs(sop)
+
+    # Prompt for missing required inputs
+    for inp in sop.get_required_inputs():
+        if inp.name not in resolved:
+            label = inp.description or inp.name
+            if inp.type == "date":
+                label += " (YYYY-MM-DD)"
+            value = Prompt.ask(f"  [cyan]{label}[/cyan]")
+            resolved[inp.name] = value
+
+    return resolved
+
+
 def _run_sop(sop_key: str):
-    """Run a SOP by key."""
+    """Run a SOP by key. Supports v1 (single prompt) and v2 (multi-step, inputs)."""
+    from adjutant.core.sop import build_step_prompt
+
     config = _require_config()
     store = _get_sop_store(config)
     sop = store.get_sop(sop_key)
@@ -234,18 +258,49 @@ def _run_sop(sop_key: str):
         console.print(f"[red]SOP not found: {sop_key}[/red]")
         sys.exit(1)
 
-    console.print(f"[bold]{sop.icon} {sop.label}[/bold] — {sop.description}\n")
+    console.print(f"[bold]{sop.icon} {sop.label}[/bold] — {sop.description}")
+    if sop.is_v2 and sop.tags:
+        console.print(f"[dim]Tags: {', '.join(sop.tags)}[/dim]")
+    console.print()
 
-    prompt = build_sop_prompt(sop, config.notebook_root)
+    # Collect input parameters (v2)
+    input_values = _collect_sop_inputs(sop)
 
-    dispatcher = Dispatcher()
+    dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
     model = config.ai_model or None
-    response = _run_async(
-        _stream_and_collect(dispatcher, prompt, config.notebook_root, config.ai_tool, model)
-    )
 
-    if sop.output.startswith("file:"):
-        _write_sop_output(sop, response, config.notebook_root)
+    # Multi-step execution (v2)
+    if sop.is_multistep:
+        previous_output = None
+        for i, step in enumerate(sop.steps, 1):
+            console.print(f"\n[bold]── 步驟 {i}/{len(sop.steps)}: {step.name} ──[/bold]\n")
+            prompt = build_step_prompt(
+                sop, step, config.notebook_root,
+                input_values=input_values,
+                previous_output=previous_output,
+            )
+            response = _run_async(
+                _stream_and_collect(
+                    dispatcher, prompt, config.notebook_root, config.ai_tool, model,
+                )
+            )
+            previous_output = response
+
+        # Final output handling uses last step's response
+        if sop.output.startswith("file:"):
+            _write_sop_output(sop, previous_output, config.notebook_root)
+    else:
+        # Single-step execution (v1 or simple v2)
+        prompt = build_sop_prompt(
+            sop, config.notebook_root, input_values=input_values,
+        )
+        response = _run_async(
+            _stream_and_collect(
+                dispatcher, prompt, config.notebook_root, config.ai_tool, model,
+            )
+        )
+        if sop.output.startswith("file:"):
+            _write_sop_output(sop, response, config.notebook_root)
 
 
 @cli.command()
@@ -341,6 +396,221 @@ def sop_new(key: str):
     console.print(f"Edit the file to customize the prompt template.")
 
 
+# ── Index commands ─────────────────────────────────────────────
+
+
+@cli.group()
+def index():
+    """Manage the notebook vector index (RAG)."""
+    pass
+
+
+@index.command("build")
+@click.option("--full", is_flag=True, help="Full rebuild (ignore cache)")
+def index_build(full: bool):
+    """Build or update the notebook vector index."""
+    config = _require_config()
+
+    async def _build():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.index import build_index
+
+        console.print("[bold]Building notebook index...[/bold]")
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        console.print(f"  Embedding provider: {type(embedder).__name__}")
+
+        meta = await build_index(
+            config.notebook_root, embedder, incremental=not full,
+        )
+
+        console.print(f"[green]Index built:[/green]")
+        console.print(f"  Files: {meta.file_count}")
+        console.print(f"  Chunks: {meta.chunk_count}")
+        console.print(f"  Last built: {meta.last_built}")
+
+    _run_async(_build())
+
+
+@index.command("status")
+def index_status():
+    """Show index status."""
+    from adjutant.core.index import get_index_status
+
+    meta = get_index_status()
+    if not meta.last_built:
+        console.print("[yellow]Index not built yet.[/yellow] Run [bold]adjutant index build[/bold]")
+        return
+
+    console.print("[bold]Index status:[/bold]")
+    console.print(f"  Files indexed: {meta.file_count}")
+    console.print(f"  Total chunks: {meta.chunk_count}")
+    console.print(f"  Last built: {meta.last_built}")
+
+
+@index.command("search")
+@click.argument("query")
+@click.option("--top-k", "-k", default=5, help="Number of results")
+def index_search(query: str, top_k: int):
+    """Search the notebook index."""
+    config = _require_config()
+
+    async def _search():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.retriever import retrieve
+
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        results = await retrieve(query, embedder, top_k=top_k)
+
+        if not results:
+            console.print("[yellow]No results found.[/yellow] Is the index built?")
+            return
+
+        for i, r in enumerate(results, 1):
+            header = f"[bold cyan]{r.source}[/bold cyan]"
+            if r.heading:
+                header += f" > {r.heading}"
+            console.print(f"\n{i}. {header} [dim](score: {r.score:.4f})[/dim]")
+            # Show first 200 chars of text
+            preview = r.text[:200].replace("\n", " ")
+            if len(r.text) > 200:
+                preview += "..."
+            console.print(f"   {preview}")
+
+    _run_async(_search())
+
+
+# ── Memory commands ────────────────────────────────────────────
+
+
+@cli.group()
+def memory():
+    """Manage the vector memory store."""
+    pass
+
+
+@memory.command("list")
+@click.option("--category", "-c", default=None, help="Filter by category")
+def memory_list(category: str | None):
+    """List all stored memories."""
+    config = _require_config()
+
+    async def _list():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.memory import MemoryStore
+
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        store = MemoryStore(embedder)
+        entries = store.list_all(category=category)
+
+        if not entries:
+            console.print("[yellow]No memories stored.[/yellow]")
+            return
+
+        table = Table(title=f"Memories ({len(entries)})")
+        table.add_column("ID", style="dim", width=12)
+        table.add_column("Category", style="cyan", width=12)
+        table.add_column("Content")
+        table.add_column("Source", style="dim", width=10)
+        table.add_column("Created", style="dim", width=16)
+
+        for e in entries:
+            content = e.content[:80] + "..." if len(e.content) > 80 else e.content
+            created = e.created[:16] if len(e.created) >= 16 else e.created
+            table.add_row(e.id, e.category, content, e.source, created)
+
+        console.print(table)
+
+    _run_async(_list())
+
+
+@memory.command("add")
+@click.argument("content")
+@click.option("--category", "-c", default="fact", help="Category: fact, preference, instruction, context")
+def memory_add(content: str, category: str):
+    """Add a new memory."""
+    config = _require_config()
+
+    async def _add():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.memory import MemoryStore
+
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        store = MemoryStore(embedder)
+        entry = await store.add(content, category=category)
+        console.print(f"[green]Memory added:[/green] {entry.id}")
+
+    _run_async(_add())
+
+
+@memory.command("search")
+@click.argument("query")
+@click.option("--top-k", "-k", default=5, help="Number of results")
+def memory_search(query: str, top_k: int):
+    """Search memories by semantic similarity."""
+    config = _require_config()
+
+    async def _search():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.memory import MemoryStore
+
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        store = MemoryStore(embedder)
+        entries = await store.search(query, top_k=top_k)
+
+        if not entries:
+            console.print("[yellow]No matching memories.[/yellow]")
+            return
+
+        for i, e in enumerate(entries, 1):
+            console.print(f"\n{i}. [bold cyan]{e.category}[/bold cyan] [dim]({e.id})[/dim]")
+            console.print(f"   {e.content}")
+
+    _run_async(_search())
+
+
+@memory.command("forget")
+@click.argument("memory_id")
+def memory_forget(memory_id: str):
+    """Delete a memory by ID."""
+    config = _require_config()
+
+    async def _forget():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.memory import MemoryStore
+
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        store = MemoryStore(embedder)
+        deleted = store.forget(memory_id)
+        if deleted:
+            console.print(f"[green]Memory {memory_id} deleted.[/green]")
+        else:
+            console.print(f"[red]Memory {memory_id} not found.[/red]")
+
+    _run_async(_forget())
+
+
+@memory.command("import")
+def memory_import():
+    """Import memories from ~/.adjutant/memory.md into the vector store."""
+    config = _require_config()
+
+    async def _import():
+        from adjutant.core.embeddings import get_embedding_provider
+        from adjutant.core.memory import MemoryStore
+
+        embedder = await get_embedding_provider(ollama_base_url=config.ollama_base_url)
+        store = MemoryStore(embedder)
+
+        console.print("[bold]Importing from memory.md...[/bold]")
+        count = await store.import_from_file()
+        if count:
+            console.print(f"[green]Imported {count} memories.[/green]")
+        else:
+            console.print("[yellow]No memories to import (file empty or not found).[/yellow]")
+
+    _run_async(_import())
+
+
 # ── REPL mode ──────────────────────────────────────────────────
 
 
@@ -383,7 +653,7 @@ def _repl():
     if session is None:
         session = Session(name="repl")
 
-    dispatcher = Dispatcher()
+    dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
     model = config.ai_model or None
 
     while True:
@@ -540,6 +810,27 @@ def bot(platform: str | None):
     else:
         console.print(f"[red]Unsupported platform:[/red] {plat}")
         sys.exit(1)
+
+
+# ── MCP Server ────────────────────────────────────────────────
+
+
+@cli.command("mcp")
+def mcp_server():
+    """Start the MCP (Model Context Protocol) server on stdio.
+
+    Add to Claude Code / Cursor .mcp.json:
+      {"mcpServers": {"adjutant": {"command": "adjutant", "args": ["mcp"]}}}
+    """
+    try:
+        from adjutant.mcp.server import run_server
+    except ImportError:
+        console.print("[red]Error:[/red] mcp package not installed.")
+        console.print("Install with: pip install 'mcp>=1.0'")
+        sys.exit(1)
+
+    _require_config()
+    run_server()
 
 
 if __name__ == "__main__":

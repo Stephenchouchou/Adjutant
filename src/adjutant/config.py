@@ -39,6 +39,16 @@ TOOL_MODELS: dict[str, list[tuple[str, str]]] = {
         ("gpt-4.1", "GPT-4.1"),
         ("gpt-4o", "GPT-4o"),
     ],
+    "ollama": [
+        ("", "(default)"),
+        ("llama3.1", "Llama 3.1"),
+        ("llama3.2", "Llama 3.2"),
+        ("mistral", "Mistral"),
+        ("codellama", "Code Llama"),
+        ("phi3", "Phi-3"),
+        ("gemma2", "Gemma 2"),
+        ("qwen2.5", "Qwen 2.5"),
+    ],
 }
 
 
@@ -77,6 +87,9 @@ class AdjutantConfig(BaseModel):
         description="User SOP directory",
     )
     paths: NotebookPaths = Field(default_factory=NotebookPaths, description="Notebook structure")
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", description="Ollama server URL"
+    )
     bot: BotConfig = Field(default_factory=BotConfig, description="Bot integration")
 
 
@@ -91,6 +104,7 @@ def load_config() -> AdjutantConfig | None:
     notebook_root = Path(data.get("notebook_root", "")).expanduser()
     ai_tool = data.get("ai_tool", "claude")
     ai_model = data.get("ai_model", "")
+    ollama_base_url = data.get("ollama_base_url", "http://localhost:11434")
 
     sop_dirs = data.get("sop_dirs", {})
     sop_builtin = Path(sop_dirs.get("builtin", str(AdjutantConfig.model_fields["sop_dirs_builtin"].default)))
@@ -117,6 +131,7 @@ def load_config() -> AdjutantConfig | None:
         notebook_root=notebook_root,
         ai_tool=ai_tool,
         ai_model=ai_model,
+        ollama_base_url=ollama_base_url,
         sop_dirs_builtin=sop_builtin,
         sop_dirs_user=sop_user,
         paths=notebook_paths,
@@ -132,6 +147,7 @@ def save_config(config: AdjutantConfig) -> None:
         f'notebook_root = "{config.notebook_root}"',
         f'ai_tool = "{config.ai_tool}"',
         f'ai_model = "{config.ai_model}"',
+        f'ollama_base_url = "{config.ollama_base_url}"',
         "",
         "[sop_dirs]",
         f'builtin = "{config.sop_dirs_builtin}"',

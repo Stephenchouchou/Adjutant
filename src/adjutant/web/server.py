@@ -29,7 +29,7 @@ from adjutant.config import (
 from adjutant.core.chat import DEFAULT_PERSONA
 from adjutant.core.chat import build_chat_prompt
 from adjutant.core.dispatcher import Dispatcher
-from adjutant.core.sop import SOPStore, build_sop_prompt
+from adjutant.core.sop import SOPStore, build_sop_prompt, build_step_prompt, resolve_inputs
 from adjutant.models.session import Session
 
 
@@ -44,11 +44,30 @@ class TokenPayload(PydanticBaseModel):
 
 class ContentPayload(PydanticBaseModel):
     content: str
+    category: str = "fact"
 
 
 class ModelPayload(PydanticBaseModel):
     ai_tool: str
     ai_model: str
+
+
+class ConfigPayload(PydanticBaseModel):
+    ollama_base_url: str | None = None
+    notebook_root: str | None = None
+    inbox: str | None = None
+    tasks: str | None = None
+    daily_dir: str | None = None
+    projects_dir: str | None = None
+    assets_dir: str | None = None
+    bot_allowed_chat_ids: list[int] | None = None
+
+
+class DirectivePayload(PydanticBaseModel):
+    filename: str
+    trigger: str
+    body: str
+
 
 logger = logging.getLogger(__name__)
 
@@ -181,6 +200,81 @@ def create_app(
         from adjutant.core.file_ops import get_notebook_stats
         return get_notebook_stats(config.notebook_root, paths=config.paths)
 
+    @app.get("/api/index/status")
+    async def index_status():
+        """Get RAG index build status."""
+        from adjutant.core.index import IndexMeta
+        meta = IndexMeta.load()
+        return {
+            "built": bool(meta.last_built),
+            "last_built": meta.last_built,
+            "file_count": meta.file_count,
+            "chunk_count": meta.chunk_count,
+        }
+
+    _index_building = False
+
+    @app.post("/api/index/build")
+    async def build_index_api():
+        """Build or rebuild the RAG index."""
+        nonlocal _index_building
+        if _index_building:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "Index build already in progress"}, status_code=409)
+        try:
+            _index_building = True
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.index import build_index
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            meta = await build_index(config.notebook_root, embedder)
+            return {
+                "ok": True,
+                "file_count": meta.file_count,
+                "chunk_count": meta.chunk_count,
+                "last_built": meta.last_built,
+            }
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+        finally:
+            _index_building = False
+
+    @app.get("/api/search")
+    async def search_notes(q: str = "", k: int = 5):
+        """Semantic search over the notebook index."""
+        if not q:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "q (query) parameter required"}, status_code=400)
+        try:
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.retriever import retrieve
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            results = await retrieve(q, embedder, top_k=k)
+            return {
+                "query": q,
+                "results": [
+                    {
+                        "source": r.source,
+                        "heading": r.heading,
+                        "text": r.text,
+                        "score": r.score,
+                    }
+                    for r in results
+                ],
+            }
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                {"error": f"Search failed: {e}. Is the index built?"},
+                status_code=500,
+            )
+
     @app.get("/api/files")
     async def list_files(path: str = ""):
         from adjutant.core.file_ops import list_directory, FileOutsideRootError
@@ -236,6 +330,72 @@ def create_app(
         save_memory(payload.content)
         return {"ok": True}
 
+    @app.get("/api/memory/entries")
+    async def list_memory_entries(category: str | None = None):
+        """List all vector memory entries."""
+        try:
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.memory import MemoryStore
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            store = MemoryStore(embedder)
+            entries = store.list_all(category=category)
+            return {
+                "count": len(entries),
+                "entries": [
+                    {
+                        "id": e.id,
+                        "content": e.content,
+                        "category": e.category,
+                        "created": e.created,
+                        "source": e.source,
+                    }
+                    for e in entries
+                ],
+            }
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.post("/api/memory/entries")
+    async def add_memory_entry(payload: ContentPayload):
+        """Add a new vector memory entry."""
+        try:
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.memory import MemoryStore
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            store = MemoryStore(embedder)
+            entry = await store.add(payload.content, category=payload.category, source="web")
+            return {"ok": True, "id": entry.id}
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.delete("/api/memory/entries/{memory_id}")
+    async def delete_memory_entry(memory_id: str):
+        """Delete a vector memory entry by ID."""
+        try:
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.memory import MemoryStore
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            store = MemoryStore(embedder)
+            deleted = store.forget(memory_id)
+            if not deleted:
+                from fastapi.responses import JSONResponse
+                return JSONResponse({"error": "Memory not found"}, status_code=404)
+            return {"ok": True}
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+
     # ── Model Selection ────────────────────────────────────────
 
     @app.get("/api/models")
@@ -255,6 +415,207 @@ def create_app(
         config.ai_model = payload.ai_model
         save_config(config)
         return {"ok": True, "ai_tool": config.ai_tool, "ai_model": config.ai_model}
+
+    # ── Settings Management ────────────────────────────────────
+
+    @app.get("/api/settings")
+    async def get_settings():
+        """Get full configuration for settings panel."""
+        return {
+            "ai_tool": config.ai_tool,
+            "ai_model": config.ai_model,
+            "ollama_base_url": config.ollama_base_url,
+            "notebook_root": str(config.notebook_root),
+            "paths": {
+                "inbox": config.paths.inbox,
+                "tasks": config.paths.tasks,
+                "daily_dir": config.paths.daily_dir,
+                "projects_dir": config.paths.projects_dir,
+                "assets_dir": config.paths.assets_dir,
+            },
+            "bot": {
+                "platform": config.bot.platform,
+                "allowed_chat_ids": config.bot.allowed_chat_ids,
+            },
+        }
+
+    @app.post("/api/settings")
+    async def save_settings(payload: ConfigPayload):
+        """Update configuration settings."""
+        if payload.ollama_base_url is not None:
+            config.ollama_base_url = payload.ollama_base_url
+        if payload.notebook_root is not None:
+            config.notebook_root = Path(payload.notebook_root)
+        if payload.inbox is not None:
+            config.paths.inbox = payload.inbox
+        if payload.tasks is not None:
+            config.paths.tasks = payload.tasks
+        if payload.daily_dir is not None:
+            config.paths.daily_dir = payload.daily_dir
+        if payload.projects_dir is not None:
+            config.paths.projects_dir = payload.projects_dir
+        if payload.assets_dir is not None:
+            config.paths.assets_dir = payload.assets_dir
+        if payload.bot_allowed_chat_ids is not None:
+            config.bot.allowed_chat_ids = payload.bot_allowed_chat_ids
+        save_config(config)
+        return {"ok": True}
+
+    # ── Memory Search ──────────────────────────────────────────
+
+    @app.get("/api/memory/search")
+    async def search_memory_api(q: str = "", k: int = 5):
+        """Semantic search over vector memory."""
+        if not q:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "q (query) parameter required"}, status_code=400)
+        try:
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.memory import MemoryStore, format_memory_context
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            store = MemoryStore(embedder)
+            entries = await store.search(q, top_k=k)
+            return {
+                "query": q,
+                "entries": [
+                    {
+                        "id": e.id,
+                        "content": e.content,
+                        "category": e.category,
+                        "created": e.created,
+                        "source": e.source,
+                    }
+                    for e in entries
+                ],
+            }
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    @app.post("/api/memory/import")
+    async def import_memory_api():
+        """Import memories from flat memory.md into vector store."""
+        try:
+            from adjutant.core.embeddings import get_embedding_provider
+            from adjutant.core.memory import MemoryStore
+
+            embedder = await get_embedding_provider(
+                ollama_base_url=config.ollama_base_url,
+            )
+            store = MemoryStore(embedder)
+            count = await store.import_from_file()
+            return {"ok": True, "imported": count}
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": str(e)}, status_code=500)
+
+    # ── Directives ─────────────────────────────────────────────
+
+    @app.get("/api/directives")
+    async def list_directives():
+        """List all directives (built-in and user)."""
+        from adjutant.prompts import load_directives
+        directives = load_directives()
+        return {
+            "directives": [
+                {
+                    "trigger": d.trigger,
+                    "body": d.body,
+                    "source": str(d.source),
+                    "is_user": ".adjutant" in str(d.source),
+                    "filename": d.source.stem,
+                }
+                for d in directives
+            ],
+        }
+
+    @app.post("/api/directives")
+    async def create_directive(payload: DirectivePayload):
+        """Create or update a user directive."""
+        user_dir = Path.home() / ".adjutant" / "prompts" / "directives"
+        user_dir.mkdir(parents=True, exist_ok=True)
+        filename = payload.filename.replace("/", "_").replace("..", "_")
+        if not filename.endswith(".md"):
+            filename += ".md"
+        path = user_dir / filename
+        content = f"---\ntrigger: {payload.trigger}\n---\n\n{payload.body}\n"
+        path.write_text(content, encoding="utf-8")
+        # Clear directive cache
+        from adjutant.prompts import load_directives
+        load_directives.__wrapped__ if hasattr(load_directives, '__wrapped__') else None
+        return {"ok": True, "path": str(path)}
+
+    @app.delete("/api/directives/{filename}")
+    async def delete_directive(filename: str):
+        """Delete a user directive."""
+        user_dir = Path.home() / ".adjutant" / "prompts" / "directives"
+        path = user_dir / f"{filename}.md"
+        if not path.is_file():
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "Directive not found"}, status_code=404)
+        if ".adjutant" not in str(path):
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "Cannot delete built-in directives"}, status_code=403)
+        path.unlink()
+        return {"ok": True}
+
+    # ── SOP Management ─────────────────────────────────────────
+
+    @app.get("/api/sops/detail/{sop_key}")
+    async def get_sop_detail(sop_key: str):
+        """Get full SOP details including v2 metadata."""
+        store = SOPStore(config.sop_dirs_builtin, config.sop_dirs_user)
+        sop = store.get_sop(sop_key)
+        if not sop:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "SOP not found"}, status_code=404)
+        return {
+            "key": sop.key,
+            "label": sop.label,
+            "icon": sop.icon,
+            "description": sop.description,
+            "version": sop.version,
+            "author": sop.author,
+            "tags": sop.tags,
+            "is_builtin": sop.is_builtin,
+            "is_v2": sop.is_v2,
+            "is_multistep": sop.is_multistep,
+            "tools": sop.tools,
+            "constraints": sop.constraints,
+            "output": sop.output,
+            "inputs": [
+                {
+                    "name": i.name,
+                    "type": i.type,
+                    "default": i.default,
+                    "description": i.description,
+                }
+                for i in sop.inputs
+            ],
+            "steps": [
+                {"name": s.name, "prompt_preview": s.prompt[:100]}
+                for s in sop.steps
+            ],
+        }
+
+    @app.post("/api/sops/create")
+    async def create_sop_api(payload: dict):
+        """Create a new user SOP template."""
+        from adjutant.core.sop import SOPStore as Store
+        key = payload.get("key", "")
+        label = payload.get("label", key)
+        description = payload.get("description", "")
+        files = payload.get("files", [])
+        body = payload.get("body", "")
+        if not key:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "key is required"}, status_code=400)
+        store = Store(config.sop_dirs_builtin, config.sop_dirs_user)
+        path = store.save_sop(key, label, description, files, body)
+        return {"ok": True, "path": str(path)}
 
     # ── Bot Management ─────────────────────────────────────
 
@@ -353,13 +714,19 @@ def create_app(
             shutdown_task = None
 
         session = Session(name="web-chat")
-        dispatcher = Dispatcher()
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
         model = config.ai_model or None
 
         # Send init
         store = SOPStore(config.sop_dirs_builtin, config.sop_dirs_user)
         sops = [
-            {"key": s.key, "label": s.label, "icon": s.icon, "description": s.description}
+            {
+                "key": s.key, "label": s.label, "icon": s.icon,
+                "description": s.description, "version": s.version,
+                "is_v2": s.is_v2, "is_multistep": s.is_multistep,
+                "has_inputs": bool(s.inputs),
+                "tags": s.tags, "author": s.author,
+            }
             for s in store.list_sops()
         ]
         from adjutant.core.file_ops import get_notebook_stats
@@ -404,9 +771,30 @@ def create_app(
                 msg_type = data.get("type", "")
                 logger.info("Received: type=%s", msg_type)
 
-                if msg_type == "message":
+                if msg_type == "load_session":
+                    session_id = data.get("session_id", "")
+                    loaded = Session.load(session_id)
+                    if loaded:
+                        session = loaded
+                        session.name = "web-chat (resumed)"
+                        await _safe_send(websocket, {
+                            "type": "session_loaded",
+                            "id": str(session.id),
+                            "messages": [
+                                {"role": m.role, "content": m.content}
+                                for m in session.messages
+                            ],
+                        })
+                    else:
+                        await _safe_send(websocket, {
+                            "type": "error",
+                            "data": f"Session not found: {session_id}",
+                        })
+
+                elif msg_type == "message":
                     text = data.get("text", "").strip()
                     image_paths = data.get("image_paths", [])
+                    file_paths = data.get("file_paths", [])
                     if not text and not image_paths:
                         continue
 
@@ -418,6 +806,23 @@ def create_app(
                             "請將圖片連結（`![描述](路徑)`）寫入適當的 md 檔案"
                             "（例如今日的 daily note 或相關專案檔）。"
                         )
+
+                    # Attach file context
+                    if file_paths:
+                        from adjutant.core.file_ops import read_file as _read_file
+                        file_sections = []
+                        for fp in file_paths:
+                            try:
+                                content = _read_file(
+                                    config.notebook_root / fp, config.notebook_root
+                                )
+                                file_sections.append(f"### {fp}\n\n{content}")
+                            except (FileNotFoundError, OSError):
+                                pass
+                        if file_sections:
+                            prompt_text += "\n\n## 附加檔案\n\n" + "\n\n---\n\n".join(
+                                file_sections
+                            )
 
                     full_prompt = build_chat_prompt(prompt_text, session)
                     session.add_message("user", text)
@@ -431,6 +836,7 @@ def create_app(
 
                 elif msg_type == "run_sop":
                     sop_key = data.get("key", "")
+                    input_values = data.get("inputs", {})
                     sop = store.get_sop(sop_key)
                     if not sop:
                         await _safe_send(websocket, {
@@ -439,7 +845,29 @@ def create_app(
                         })
                         continue
 
-                    prompt = build_sop_prompt(sop, config.notebook_root)
+                    # Check if SOP needs inputs that weren't provided
+                    if sop.inputs and not input_values:
+                        required = sop.get_required_inputs()
+                        defaults = resolve_inputs(sop)
+                        if required:
+                            await _safe_send(websocket, {
+                                "type": "sop_input_request",
+                                "key": sop_key,
+                                "label": sop.label,
+                                "icon": sop.icon,
+                                "inputs": [
+                                    {
+                                        "name": i.name,
+                                        "type": i.type,
+                                        "default": defaults.get(i.name, i.default),
+                                        "description": i.description,
+                                    }
+                                    for i in sop.inputs
+                                ],
+                            })
+                            continue
+
+                    resolved = resolve_inputs(sop, input_values)
                     session.add_message("user", f"[SOP: {sop.label}]")
 
                     await _safe_send(websocket, {
@@ -449,22 +877,63 @@ def create_app(
                         "icon": sop.icon,
                     })
 
-                    response = await _stream_ai(prompt)
-                    session.add_message("adjutant", response)
-                    if not connected:
-                        break
-                    await _safe_send(websocket, {"type": "stream_end"})
+                    # Multi-step execution (v2)
+                    if sop.is_multistep:
+                        previous_output = None
+                        for i, step in enumerate(sop.steps):
+                            step_label = f"步驟 {i + 1}/{len(sop.steps)}: {step.name}"
+                            await _safe_send(websocket, {
+                                "type": "sop_step",
+                                "step": i + 1,
+                                "total": len(sop.steps),
+                                "name": step.name,
+                            })
+                            prompt = build_step_prompt(
+                                sop, step, config.notebook_root,
+                                input_values=resolved,
+                                previous_output=previous_output,
+                            )
+                            response = await _stream_ai(prompt)
+                            if not connected:
+                                break
+                            previous_output = response
 
-                    # Offer file write if SOP output is file:
+                        if not connected:
+                            break
+                        session.add_message("adjutant", previous_output or "")
+                        await _safe_send(websocket, {"type": "stream_end"})
+                        response = previous_output or ""
+                    else:
+                        # Single-step execution
+                        prompt = build_sop_prompt(
+                            sop, config.notebook_root, input_values=resolved,
+                        )
+                        response = await _stream_ai(prompt)
+                        session.add_message("adjutant", response)
+                        if not connected:
+                            break
+                        await _safe_send(websocket, {"type": "stream_end"})
+
+                    # Offer file write with diff preview
                     if sop.output.startswith("file:"):
                         from datetime import datetime as dt
                         rel_path = sop.output[5:].replace(
                             "{today}", dt.now().strftime("%Y-%m-%d")
                         )
+                        # Try to read existing file for diff
+                        existing = ""
+                        try:
+                            from adjutant.core.file_ops import read_file
+                            existing = read_file(
+                                config.notebook_root / rel_path, config.notebook_root
+                            )
+                        except (FileNotFoundError, OSError):
+                            pass
                         await _safe_send(websocket, {
                             "type": "sop_file_confirm",
                             "path": rel_path,
                             "content": response,
+                            "existing": existing,
                         })
 
                 elif msg_type == "sop_file_write":

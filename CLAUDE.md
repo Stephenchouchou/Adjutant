@@ -8,12 +8,19 @@ A CLI-first personal AI assistant that integrates with your note-taking system. 
 
 - `src/adjutant/__main__.py` — CLI entry point (Click): chat, SOP commands, web, bot
 - `src/adjutant/config.py` — Configuration, model definitions (TOOL_MODELS), persona/memory/token helpers
-- `src/adjutant/core/dispatcher.py` — AI CLI streaming dispatcher (claude/gemini/codex)
-- `src/adjutant/core/chat.py` — Chat logic: configurable persona + memory injection + session history
-- `src/adjutant/core/sop.py` — SOP template loading and execution
+- `src/adjutant/core/dispatcher.py` — AI dispatcher router (delegates to backends)
+- `src/adjutant/core/backends/` — AI backend implementations (subprocess, ollama)
+- `src/adjutant/core/chat.py` — Chat logic: persona + memory + RAG + session history
+- `src/adjutant/core/sop.py` — SOP v1/v2 template loading (inputs, multi-step, search: queries)
+- `src/adjutant/core/memory.py` — Vector memory store (LanceDB, contextual retrieval)
 - `src/adjutant/core/file_ops.py` — Safe file read/write with glob, size limits, diff preview
+- `src/adjutant/core/embeddings.py` — Embedding providers (Ollama, sentence-transformers)
+- `src/adjutant/core/index.py` — Notebook vector index (markdown chunking, LanceDB)
+- `src/adjutant/core/retriever.py` — Semantic search over the notebook index
 - `src/adjutant/models/session.py` — Conversation history model
-- `src/adjutant/sop/` — Built-in SOP templates
+- `src/adjutant/prompts/` — Extractable prompt templates (persona, directives)
+- `src/adjutant/sop/` — Built-in SOP templates (v2 format)
+- `src/adjutant/mcp/server.py` — MCP Server (stdio transport, tools/resources/prompts)
 - `src/adjutant/bot/handlers.py` — Platform-agnostic bot handlers (inbox capture, list items)
 - `src/adjutant/bot/telegram.py` — Telegram adapter with AI routing and Web UI broadcast
 - `src/adjutant/web/server.py` — FastAPI + WebSocket server, REST APIs, bot lifecycle
@@ -25,13 +32,20 @@ A CLI-first personal AI assistant that integrates with your note-taking system. 
 - Click (CLI), Pydantic (models), Rich (terminal)
 - FastAPI + WebSocket (Web UI)
 - python-telegram-bot (Telegram integration)
-- AI CLI: claude (default), gemini, codex
+- AI: claude, gemini, codex (subprocess), ollama (HTTP)
+- LanceDB + pyarrow (vector index for RAG and memory)
+- MCP SDK (Model Context Protocol server)
+- PyYAML (SOP v2 frontmatter parsing)
 
 ## Architecture Notes
 
-- Ported from CrossVal's dispatcher (simplified to single-AI mode)
-- Persona: customizable via `~/.adjutant/persona.md`, falls back to built-in DEFAULT_PERSONA
-- Memory: persistent at `~/.adjutant/memory.md`, injected into every AI prompt
+- Dispatcher routes to backends: SubprocessBackend (claude/gemini/codex) or OllamaBackend (HTTP)
+- Persona: `~/.adjutant/persona.md` override, built-in at `src/adjutant/prompts/persona.md`
+- Directives: trigger-keyword prompt injection via `prompts/directives/*.md`
+- Memory: vector store (LanceDB) with contextual retrieval, fallback to flat `~/.adjutant/memory.md`
+- RAG: LanceDB vector index at `~/.adjutant/index/`, semantic search via embeddings
+- SOP: v1 (simple) and v2 (typed inputs, multi-step, tools, constraints) formats
+- MCP: `adjutant mcp` exposes tools/resources/prompts via stdio for Claude Code/Cursor
 - Model selection: TOOL_MODELS in config.py, persisted in config.toml
 - Bot: AI-routed messages (question → AI answer, note → inbox capture, fallback on failure)
 - Bot ↔ Web UI: broadcast() pushes Telegram conversations to all WebSocket clients

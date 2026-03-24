@@ -33,12 +33,22 @@ else
 fi
 
 # Install package
-echo "[3/4] Installing Adjutant and dependencies..."
+echo "[3/5] Installing Adjutant and dependencies..."
 "$VENV_DIR/bin/pip" install --quiet --upgrade pip
 "$VENV_DIR/bin/pip" install --quiet -e "$SCRIPT_DIR"
 
+# Optional: local embeddings (for RAG/memory without Ollama)
+echo "[4/5] Local embeddings (sentence-transformers)..."
+read -p "  Install local embedding models? (skip if using Ollama) [y/N] " INSTALL_EMB
+if [[ "$INSTALL_EMB" =~ ^[Yy]$ ]]; then
+    "$VENV_DIR/bin/pip" install --quiet -e "$SCRIPT_DIR[local-embeddings]"
+    echo "  Local embeddings installed"
+else
+    echo "  Skipped (install later: pip install -e '.[local-embeddings]')"
+fi
+
 # Run init if not configured
-echo "[4/4] Checking configuration..."
+echo "[5/5] Checking configuration..."
 if [ ! -f "$HOME/.adjutant/config.toml" ]; then
     echo ""
     echo "First time setup — running 'adjutant init'..."
@@ -58,6 +68,14 @@ echo "  adjutant              # Interactive chat"
 echo "  adjutant web          # Web UI at http://127.0.0.1:8100"
 echo "  adjutant bot          # Telegram bot (standalone)"
 echo "  adjutant triage       # Run inbox triage SOP"
+echo ""
+echo "RAG & Memory (requires Ollama or local-embeddings):"
+echo "  adjutant index build  # Build semantic search index"
+echo "  adjutant index search # Search your notes"
+echo "  adjutant memory add   # Add to vector memory"
+echo ""
+echo "MCP Server (for Claude Code / Cursor):"
+echo "  adjutant mcp          # Start MCP server (stdio)"
 echo ""
 echo "Or run directly without activating:"
 echo "  $VENV_DIR/bin/adjutant web"
