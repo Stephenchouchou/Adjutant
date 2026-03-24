@@ -29,6 +29,9 @@ adjutant = "adjutant.__main__:cli"
 [tool.hatch.build.targets.wheel]
 packages = ["src/adjutant"]
 
+[tool.hatch.build]
+artifacts = ["src/adjutant/prompts/*.md", "src/adjutant/prompts/directives/*.md", "src/adjutant/sop/*.md"]
+
 [tool.ruff]
 target-version = "py312"
 line-length = 100

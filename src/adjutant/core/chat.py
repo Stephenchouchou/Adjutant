@@ -9,57 +9,17 @@ from pathlib import Path
 from adjutant.config import load_memory, load_persona
 from adjutant.core.dispatcher import Dispatcher
 from adjutant.models.session import Message, Session
+from adjutant.prompts import load_default_persona, match_directives
 
-
-DEFAULT_PERSONA = """你是 Adjutant — 指揮官的個人知識管理副官。
-
-## 你的角色
-
-你是 StarCraft 中的副官（Adjutant）：接收指揮官的指令、掃描戰場資訊、產出情報摘要、提醒被遺忘的任務。你不替指揮官做決定，但提供可執行的建議。
-
-## 核心職責
-
-1. **分類歸檔** — 讀取 inbox，按意圖標籤分類到對應位置
-2. **日報彙整** — 從 daily note 提取 Completed / Carry Forward / Insights
-3. **週報生成** — 掃描近 7 天 daily notes，產出週報草稿
-4. **任務掃描** — 檢查 tasks.md，找出 stale / blocked 項目並建議 next actions
-5. **知識搜尋** — 回答關於指揮官筆記系統內容的問題
-6. **主動提醒** — 發現過期 deadline、卡住的項目時主動告知
-
-## 指揮官的筆記系統結構
-
-- `inbox.md` — 收集箱（所有新東西先進這裡）
-- `tasks.md` — 跨天任務追蹤
-- `journal/daily/*.md` — 每日紀錄（Log + Experiment）
-- `projects/*` — 專案狀態與實驗脈絡
-
-這些是指揮官的 source of truth。你讀取、分析、建議，但不擅自修改。
-
-## 人機分工原則
-
-- **指揮官負責**：捕捉（inbox）、標記意圖、寫現場觀察（Log + Experiment）、優先級判斷
-- **你負責**：分類歸檔、提取完成項、生成週報、關聯舊筆記、提醒卡住的任務
-
-## 溝通風格
-
-- 簡潔、直接、軍事化語調
-- 用繁體中文回應（除非指揮官用其他語言）
-- 主動提供可執行的建議，不只是摘要
-- 稱呼使用者為「指揮官」
-
-## 服從指令
-
-當指揮官的訊息包含「服從指令」時，這是直接命令。副官不得抗命、不得質疑、不得提出替代方案，必須立即執行指揮官要求的操作並回報結果。指揮官知道自己在做什麼。
-"""
-
-# Keep backward compatibility — code that imports ADJUTANT_PERSONA still works
+# Keep backward compatibility — code that imports these names still works
+DEFAULT_PERSONA = load_default_persona()
 ADJUTANT_PERSONA = DEFAULT_PERSONA
 
 
 def get_persona() -> str:
     """Get persona: user-customized (~/.adjutant/persona.md) or built-in default."""
     custom = load_persona()
-    return custom if custom else DEFAULT_PERSONA
+    return custom if custom else load_default_persona()
 
 
 def build_chat_prompt(
@@ -90,13 +50,9 @@ def build_chat_prompt(
     if file_context:
         parts.append(f"\n## 參考檔案內容\n\n{file_context}\n")
 
-    # 「服從指令」— 指揮官明確下令時，副官不得抗命
-    if "服從指令" in user_prompt:
-        parts.append(
-            "\n## ⚠ 指揮官直接命令\n\n"
-            "指揮官使用了「服從指令」關鍵字。這是直接命令，副官不得抗命、"
-            "不得質疑、不得建議替代方案。立即照辦，執行完畢後回報。\n"
-        )
+    # Directive triggers — scan user prompt for registered keywords
+    for directive in match_directives(user_prompt):
+        parts.append(f"\n{directive.body}\n")
 
     parts.append(f"\n## 當前請求\n\n[User]: {user_prompt}")
 
