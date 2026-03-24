@@ -12,6 +12,34 @@ CONFIG_PATH = CONFIG_DIR / "config.toml"
 SESSIONS_DIR = CONFIG_DIR / "sessions"
 USER_SOP_DIR = CONFIG_DIR / "sop"
 BOT_TOKEN_PATH = CONFIG_DIR / ".bot_token"
+PERSONA_PATH = CONFIG_DIR / "persona.md"
+MEMORY_PATH = CONFIG_DIR / "memory.md"
+
+# CLI tools and their available models
+TOOL_MODELS: dict[str, list[tuple[str, str]]] = {
+    "claude": [
+        ("", "(CLI default)"),
+        ("claude-opus-4-6", "Opus 4.6"),
+        ("claude-sonnet-4-6", "Sonnet 4.6"),
+        ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+        ("sonnet", "Sonnet (latest)"),
+        ("opus", "Opus (latest)"),
+        ("haiku", "Haiku (latest)"),
+    ],
+    "gemini": [
+        ("", "(CLI default)"),
+        ("gemini-2.5-pro", "Gemini 2.5 Pro"),
+        ("gemini-2.5-flash", "Gemini 2.5 Flash"),
+        ("gemini-2.0-flash", "Gemini 2.0 Flash"),
+    ],
+    "codex": [
+        ("", "(CLI default)"),
+        ("o3", "o3"),
+        ("o4-mini", "o4-mini"),
+        ("gpt-4.1", "GPT-4.1"),
+        ("gpt-4o", "GPT-4o"),
+    ],
+}
 
 
 class BotConfig(BaseModel):
@@ -22,6 +50,16 @@ class BotConfig(BaseModel):
         default_factory=list,
         description="Authorized chat IDs. Empty = log IDs for setup.",
     )
+
+
+class NotebookPaths(BaseModel):
+    """Configurable notebook structure paths (relative to notebook_root)."""
+
+    inbox: str = Field(default="inbox.md", description="Inbox file for capturing items")
+    tasks: str = Field(default="tasks.md", description="Task tracking file")
+    daily_dir: str = Field(default="journal/daily", description="Daily notes directory")
+    projects_dir: str = Field(default="projects", description="Projects directory")
+    assets_dir: str = Field(default="assets", description="Attachments/images directory")
 
 
 class AdjutantConfig(BaseModel):
@@ -38,6 +76,7 @@ class AdjutantConfig(BaseModel):
         default=USER_SOP_DIR,
         description="User SOP directory",
     )
+    paths: NotebookPaths = Field(default_factory=NotebookPaths, description="Notebook structure")
     bot: BotConfig = Field(default_factory=BotConfig, description="Bot integration")
 
 
@@ -57,6 +96,16 @@ def load_config() -> AdjutantConfig | None:
     sop_builtin = Path(sop_dirs.get("builtin", str(AdjutantConfig.model_fields["sop_dirs_builtin"].default)))
     sop_user = Path(sop_dirs.get("user", str(USER_SOP_DIR))).expanduser()
 
+    # Notebook paths
+    paths_data = data.get("paths", {})
+    notebook_paths = NotebookPaths(
+        inbox=paths_data.get("inbox", "inbox.md"),
+        tasks=paths_data.get("tasks", "tasks.md"),
+        daily_dir=paths_data.get("daily_dir", "journal/daily"),
+        projects_dir=paths_data.get("projects_dir", "projects"),
+        assets_dir=paths_data.get("assets_dir", "assets"),
+    )
+
     # Bot config
     bot_data = data.get("bot", {})
     bot_config = BotConfig(
@@ -70,6 +119,7 @@ def load_config() -> AdjutantConfig | None:
         ai_model=ai_model,
         sop_dirs_builtin=sop_builtin,
         sop_dirs_user=sop_user,
+        paths=notebook_paths,
         bot=bot_config,
     )
 
@@ -86,6 +136,13 @@ def save_config(config: AdjutantConfig) -> None:
         "[sop_dirs]",
         f'builtin = "{config.sop_dirs_builtin}"',
         f'user = "{config.sop_dirs_user}"',
+        "",
+        "[paths]",
+        f'inbox = "{config.paths.inbox}"',
+        f'tasks = "{config.paths.tasks}"',
+        f'daily_dir = "{config.paths.daily_dir}"',
+        f'projects_dir = "{config.paths.projects_dir}"',
+        f'assets_dir = "{config.paths.assets_dir}"',
         "",
         "[bot]",
         f'platform = "{config.bot.platform}"',
@@ -112,3 +169,33 @@ def save_bot_token(token: str) -> None:
     CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     BOT_TOKEN_PATH.write_text(token.strip(), encoding="utf-8")
     BOT_TOKEN_PATH.chmod(0o600)
+
+
+def load_persona() -> str | None:
+    """Load custom persona from ~/.adjutant/persona.md. Returns None if not found."""
+    if PERSONA_PATH.is_file():
+        content = PERSONA_PATH.read_text(encoding="utf-8").strip()
+        if content:
+            return content
+    return None
+
+
+def save_persona(content: str) -> None:
+    """Save persona to ~/.adjutant/persona.md."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    PERSONA_PATH.write_text(content, encoding="utf-8")
+
+
+def load_memory() -> str | None:
+    """Load memory from ~/.adjutant/memory.md. Returns None if not found."""
+    if MEMORY_PATH.is_file():
+        content = MEMORY_PATH.read_text(encoding="utf-8").strip()
+        if content:
+            return content
+    return None
+
+
+def save_memory(content: str) -> None:
+    """Save memory to ~/.adjutant/memory.md."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    MEMORY_PATH.write_text(content, encoding="utf-8")

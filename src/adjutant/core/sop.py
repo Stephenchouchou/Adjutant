@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from adjutant.core.chat import ADJUTANT_PERSONA
+from adjutant.core.chat import get_persona
 from adjutant.core.file_ops import glob_files, read_file
 
 
@@ -187,4 +187,4 @@ def build_sop_prompt(sop: SOP, notebook_root: Path) -> str:
     prompt = prompt.replace("{today}", today)
     prompt = prompt.replace("{file_contents}", file_contents)
 
-    return ADJUTANT_PERSONA + "\n\n" + prompt
+    return get_persona() + "\n\n" + prompt

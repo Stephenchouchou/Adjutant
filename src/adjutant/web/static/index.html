@@ -145,6 +145,70 @@
         </div>
     </div>
 
+    <!-- ═══ PERSONA EDITOR MODAL ═══ -->
+    <div id="modal-persona" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wide">
+            <div class="modal-header">
+                <span class="modal-title">ADJUTANT PERSONA</span>
+                <div class="modal-header-actions">
+                    <button class="action-btn mini" id="persona-reset">RESET DEFAULT</button>
+                    <button class="action-btn mini" id="persona-close">CLOSE</button>
+                </div>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="editor-hint">定義副官的任務目標、人格與溝通風格。儲存後立即生效。</div>
+                <textarea class="editor-textarea" id="persona-editor" rows="20" placeholder="輸入副官的人格設定..."></textarea>
+                <div class="editor-actions">
+                    <span class="editor-msg" id="persona-msg"></span>
+                    <button class="action-btn execute" id="persona-save">SAVE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MEMORY EDITOR MODAL ═══ -->
+    <div id="modal-memory" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wide">
+            <div class="modal-header">
+                <span class="modal-title">ADJUTANT MEMORY</span>
+                <button class="action-btn mini" id="memory-close">CLOSE</button>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="editor-hint">副官的長期記憶。跨對話、跨模型共享。記錄指揮官偏好、專案背景、重要決策等。</div>
+                <textarea class="editor-textarea" id="memory-editor" rows="16" placeholder="記錄副官需要記住的事情..."></textarea>
+                <div class="editor-actions">
+                    <span class="editor-msg" id="memory-msg"></span>
+                    <button class="action-btn execute" id="memory-save">SAVE</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ MODEL SELECTOR MODAL ═══ -->
+    <div id="modal-model" class="modal-overlay" style="display:none">
+        <div class="modal-panel">
+            <div class="modal-header">
+                <span class="modal-title">MODEL SELECTION</span>
+                <button class="action-btn mini" id="model-close">CLOSE</button>
+            </div>
+            <div class="modal-body" style="padding:16px">
+                <div class="editor-hint">選擇 AI 工具與模型。變更後立即生效。</div>
+                <div class="model-row">
+                    <label class="model-label">AI Tool</label>
+                    <select class="model-select" id="model-tool-select"></select>
+                </div>
+                <div class="model-row">
+                    <label class="model-label">Model</label>
+                    <select class="model-select" id="model-model-select"></select>
+                </div>
+                <div class="editor-actions">
+                    <span class="editor-msg" id="model-msg"></span>
+                    <button class="action-btn execute" id="model-save">APPLY</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <!-- ═══ BOT SETUP MODAL ═══ -->
     <div id="modal-bot-setup" class="modal-overlay" style="display:none">
         <div class="modal-panel">

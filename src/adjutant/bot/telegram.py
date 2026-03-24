@@ -103,7 +103,7 @@ class AdjutantTelegramBot:
     ) -> None:
         if not self._check_auth(update):
             return
-        reply = handle_list_inbox(self.notebook_root)
+        reply = handle_list_inbox(self.notebook_root, paths=self.config.paths)
         await update.message.reply_text(reply)
 
     async def _cmd_tasks(
@@ -111,7 +111,7 @@ class AdjutantTelegramBot:
     ) -> None:
         if not self._check_auth(update):
             return
-        reply = handle_list_tasks(self.notebook_root)
+        reply = handle_list_tasks(self.notebook_root, paths=self.config.paths)
         await update.message.reply_text(reply)
 
     async def _on_text(
@@ -134,7 +134,7 @@ class AdjutantTelegramBot:
 
         # No AI handler → fallback to capture
         if not self._dispatcher or not self._session:
-            reply = handle_text_capture(text, self.notebook_root)
+            reply = handle_text_capture(text, self.notebook_root, inbox=self.config.paths.inbox)
             await update.message.reply_text(reply)
             return
 
@@ -174,7 +174,7 @@ class AdjutantTelegramBot:
         except Exception as e:
             logger.exception("AI routing failed: %s", e)
             # Fallback: capture to inbox
-            reply = handle_text_capture(text, self.notebook_root)
+            reply = handle_text_capture(text, self.notebook_root, inbox=self.config.paths.inbox)
             await update.message.reply_text(f"{reply}\n\n(AI unavailable: {e})")
             if self._broadcast:
                 await self._broadcast({
@@ -193,7 +193,10 @@ class AdjutantTelegramBot:
         file = await context.bot.get_file(photo.file_id)
         data = await file.download_as_bytearray()
         caption = update.message.caption or None
-        reply = handle_image_capture(bytes(data), ".jpg", caption, self.notebook_root)
+        reply = handle_image_capture(
+            bytes(data), ".jpg", caption, self.notebook_root,
+            inbox=self.config.paths.inbox, assets_dir=self.config.paths.assets_dir,
+        )
         await update.message.reply_text(reply)
 
         # Broadcast to Web UI

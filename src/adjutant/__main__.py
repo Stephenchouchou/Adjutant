@@ -103,7 +103,7 @@ def init(notebook_root: Path | None, ai_tool: str, ai_model: str):
     # Scan notebook structure
     from adjutant.core.file_ops import scan_notebook_structure
 
-    scan = scan_notebook_structure(notebook_root)
+    scan = scan_notebook_structure(notebook_root)  # uses default paths for init
     console.print("\n[bold]Notebook structure scan:[/bold]")
     missing = []
     for label, path in scan.items():

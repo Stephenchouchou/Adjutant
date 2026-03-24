@@ -2,6 +2,8 @@
 
 Personal AI knowledge management adjutant. Inspired by StarCraft's Adjutant — receives your commands, scans your notes, produces intel summaries, and reminds you of forgotten tasks.
 
+> **Note:** This is an opinionated personal tool, not a product. It's built around a specific workflow (capture → triage → daily summary → weekly review) and assumes you're comfortable with plain-text markdown notebooks. Fork and adapt to your own style.
+
 ## Core Philosophy
 
 **You command, Adjutant supports.**
@@ -121,7 +123,7 @@ Features:
 
 ### Telegram Bot
 
-Capture notes from your phone — send a message to your Adjutant bot and it goes straight into `inbox.md`.
+Chat with your adjutant from your phone. Questions get AI answers; notes get captured to inbox. You can also set up the bot from the Web UI (click BOT in the top bar).
 
 **Setup:**
 
@@ -150,7 +152,7 @@ Capture notes from your phone — send a message to your Adjutant bot and it goe
 | `/start` | Show help |
 | `/inbox` | List unchecked inbox items |
 | `/tasks` | List open tasks |
-| *(any text)* | Capture to inbox as `- [ ] your message` |
+| *(any text)* | AI-routed: answers questions or captures to inbox |
 | *(photo)* | Save to `assets/`, add image link to inbox |
 
 **Tip:** Add `export ADJUTANT_BOT_TOKEN=xxx` to your `~/.zshrc` or `~/.bashrc`, then you can start the bot anytime with just `adjutant bot`.
@@ -168,10 +170,23 @@ ai_model = ""             # empty = use CLI default
 builtin = "/path/to/src/adjutant/sop"
 user = "/home/you/.adjutant/sop"
 
+[paths]
+inbox = "inbox.md"                # capture box
+tasks = "tasks.md"                # task tracking
+daily_dir = "journal/daily"       # daily notes directory
+projects_dir = "projects"         # projects directory
+assets_dir = "assets"             # images & attachments
+
 [bot]
 platform = "telegram"
 allowed_chat_ids = []     # empty = accept all (check logs for IDs)
 ```
+
+### Persona & Memory
+
+- **Persona** (`~/.adjutant/persona.md`): Customize the adjutant's personality and behavior. Edit via Web UI (Command Palette → Persona) or directly.
+- **Memory** (`~/.adjutant/memory.md`): Persistent memory shared across all sessions and models. The adjutant includes this in every prompt.
+- **Model selection**: Switch between AI backends (Claude, Gemini, Codex) and specific models via Web UI or config.
 
 ## Architecture
 

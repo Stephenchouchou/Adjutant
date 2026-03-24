@@ -14,7 +14,19 @@ from fastapi.staticfiles import StaticFiles
 
 from pydantic import BaseModel as PydanticBaseModel
 
-from adjutant.config import AdjutantConfig, load_config, load_bot_token, save_bot_token
+from adjutant.config import (
+    AdjutantConfig,
+    TOOL_MODELS,
+    load_config,
+    load_bot_token,
+    load_memory,
+    load_persona,
+    save_bot_token,
+    save_config,
+    save_memory,
+    save_persona,
+)
+from adjutant.core.chat import DEFAULT_PERSONA
 from adjutant.core.chat import build_chat_prompt
 from adjutant.core.dispatcher import Dispatcher
 from adjutant.core.sop import SOPStore, build_sop_prompt
@@ -28,6 +40,15 @@ class ImageUpload(PydanticBaseModel):
 
 class TokenPayload(PydanticBaseModel):
     token: str
+
+
+class ContentPayload(PydanticBaseModel):
+    content: str
+
+
+class ModelPayload(PydanticBaseModel):
+    ai_tool: str
+    ai_model: str
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +162,7 @@ def create_app(
                 ext = suffix
         try:
             raw = base64.b64decode(payload.data)
-            rel_path = save_attachment(raw, config.notebook_root, ext)
+            rel_path = save_attachment(raw, config.notebook_root, ext, assets_dir=config.paths.assets_dir)
             return {"path": rel_path}
         except Exception as e:
             from fastapi.responses import JSONResponse
@@ -158,7 +179,7 @@ def create_app(
     @app.get("/api/stats")
     async def get_stats():
         from adjutant.core.file_ops import get_notebook_stats
-        return get_notebook_stats(config.notebook_root)
+        return get_notebook_stats(config.notebook_root, paths=config.paths)
 
     @app.get("/api/files")
     async def list_files(path: str = ""):
@@ -181,6 +202,59 @@ def create_app(
         except (FileNotFoundError, FileOutsideRootError, FileTooLargeError) as e:
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": str(e)}, status_code=400)
+
+    # ── Persona & Memory ─────────────────────────────────────
+
+    @app.get("/api/persona")
+    async def get_persona_api():
+        custom = load_persona()
+        return {
+            "content": custom if custom else DEFAULT_PERSONA,
+            "is_custom": custom is not None,
+            "default": DEFAULT_PERSONA,
+        }
+
+    @app.post("/api/persona")
+    async def save_persona_api(payload: ContentPayload):
+        save_persona(payload.content)
+        return {"ok": True}
+
+    @app.post("/api/persona/reset")
+    async def reset_persona_api():
+        from adjutant.config import PERSONA_PATH
+        if PERSONA_PATH.is_file():
+            PERSONA_PATH.unlink()
+        return {"ok": True, "content": DEFAULT_PERSONA}
+
+    @app.get("/api/memory")
+    async def get_memory_api():
+        content = load_memory()
+        return {"content": content or ""}
+
+    @app.post("/api/memory")
+    async def save_memory_api(payload: ContentPayload):
+        save_memory(payload.content)
+        return {"ok": True}
+
+    # ── Model Selection ────────────────────────────────────────
+
+    @app.get("/api/models")
+    async def get_models():
+        return {
+            "current_tool": config.ai_tool,
+            "current_model": config.ai_model,
+            "tools": {
+                tool: [{"id": m[0], "label": m[1]} for m in models]
+                for tool, models in TOOL_MODELS.items()
+            },
+        }
+
+    @app.post("/api/models")
+    async def set_model(payload: ModelPayload):
+        config.ai_tool = payload.ai_tool
+        config.ai_model = payload.ai_model
+        save_config(config)
+        return {"ok": True, "ai_tool": config.ai_tool, "ai_model": config.ai_model}
 
     # ── Bot Management ─────────────────────────────────────
 
@@ -289,7 +363,7 @@ def create_app(
             for s in store.list_sops()
         ]
         from adjutant.core.file_ops import get_notebook_stats
-        stats = get_notebook_stats(config.notebook_root)
+        stats = get_notebook_stats(config.notebook_root, paths=config.paths)
         if not await _safe_send(websocket, {
             "type": "init",
             "sops": sops,

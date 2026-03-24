@@ -525,6 +525,9 @@ function getPaletteItems(filter) {
 
     items.push({ type: "action", icon: "📂", label: "Browse Files", desc: "Open notebook file browser", action: "browse" });
     items.push({ type: "action", icon: "🗂️", label: "History", desc: "Browse archived sessions", action: "history" });
+    items.push({ type: "action", icon: "🧠", label: "Persona", desc: "Edit adjutant personality and mission", action: "persona" });
+    items.push({ type: "action", icon: "💾", label: "Memory", desc: "Edit adjutant persistent memory", action: "memory" });
+    items.push({ type: "action", icon: "⚙️", label: "Model", desc: "Switch AI tool and model", action: "model" });
     items.push({ type: "action", icon: "🤖", label: "Telegram Bot", desc: "Setup and manage Telegram bot", action: "bot-setup" });
 
     if (!filter) return items;
@@ -575,6 +578,12 @@ function executePaletteItem(item) {
         openSessions();
     } else if (item.action === "browse") {
         openFileBrowser();
+    } else if (item.action === "persona") {
+        openPersonaEditor();
+    } else if (item.action === "memory") {
+        openMemoryEditor();
+    } else if (item.action === "model") {
+        openModelSelector();
     } else if (item.action === "bot-setup") {
         botSetupModal.style.display = "flex";
         fetchBotStatus();
@@ -911,6 +920,164 @@ document.getElementById("modal-close-btn").addEventListener("click", () => {
 modalSessions.addEventListener("click", (e) => {
     if (e.target === modalSessions) modalSessions.style.display = "none";
 });
+
+// ── Persona Editor ───────────────────────────────────
+
+const personaModal = document.getElementById("modal-persona");
+const personaEditor = document.getElementById("persona-editor");
+const personaSave = document.getElementById("persona-save");
+const personaReset = document.getElementById("persona-reset");
+const personaClose = document.getElementById("persona-close");
+const personaMsg = document.getElementById("persona-msg");
+
+function openPersonaEditor() {
+    personaModal.style.display = "flex";
+    personaMsg.textContent = "";
+    personaMsg.className = "editor-msg";
+    fetch("/api/persona").then(r => r.json()).then(data => {
+        personaEditor.value = data.content;
+    });
+}
+
+personaSave.addEventListener("click", async () => {
+    try {
+        const r = await fetch("/api/persona", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: personaEditor.value }),
+        });
+        if (r.ok) {
+            personaMsg.textContent = "Persona saved";
+            personaMsg.className = "editor-msg success";
+        }
+    } catch (e) {
+        personaMsg.textContent = "Error: " + e.message;
+        personaMsg.className = "editor-msg error";
+    }
+});
+
+personaReset.addEventListener("click", async () => {
+    try {
+        const r = await fetch("/api/persona/reset", { method: "POST" });
+        const data = await r.json();
+        personaEditor.value = data.content;
+        personaMsg.textContent = "Reset to default";
+        personaMsg.className = "editor-msg success";
+    } catch (e) {
+        personaMsg.textContent = "Error: " + e.message;
+        personaMsg.className = "editor-msg error";
+    }
+});
+
+personaClose.addEventListener("click", () => { personaModal.style.display = "none"; });
+personaModal.addEventListener("click", (e) => { if (e.target === personaModal) personaModal.style.display = "none"; });
+
+// ── Memory Editor ────────────────────────────────────
+
+const memoryModal = document.getElementById("modal-memory");
+const memoryEditor = document.getElementById("memory-editor");
+const memorySave = document.getElementById("memory-save");
+const memoryClose = document.getElementById("memory-close");
+const memoryMsg = document.getElementById("memory-msg");
+
+function openMemoryEditor() {
+    memoryModal.style.display = "flex";
+    memoryMsg.textContent = "";
+    memoryMsg.className = "editor-msg";
+    fetch("/api/memory").then(r => r.json()).then(data => {
+        memoryEditor.value = data.content;
+    });
+}
+
+memorySave.addEventListener("click", async () => {
+    try {
+        const r = await fetch("/api/memory", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: memoryEditor.value }),
+        });
+        if (r.ok) {
+            memoryMsg.textContent = "Memory saved";
+            memoryMsg.className = "editor-msg success";
+        }
+    } catch (e) {
+        memoryMsg.textContent = "Error: " + e.message;
+        memoryMsg.className = "editor-msg error";
+    }
+});
+
+memoryClose.addEventListener("click", () => { memoryModal.style.display = "none"; });
+memoryModal.addEventListener("click", (e) => { if (e.target === memoryModal) memoryModal.style.display = "none"; });
+
+// ── Model Selector ───────────────────────────────────
+
+const modelModal = document.getElementById("modal-model");
+const modelToolSelect = document.getElementById("model-tool-select");
+const modelModelSelect = document.getElementById("model-model-select");
+const modelSave = document.getElementById("model-save");
+const modelClose = document.getElementById("model-close");
+const modelMsg = document.getElementById("model-msg");
+
+let modelData = null;
+
+function openModelSelector() {
+    modelModal.style.display = "flex";
+    modelMsg.textContent = "";
+    modelMsg.className = "editor-msg";
+    fetch("/api/models").then(r => r.json()).then(data => {
+        modelData = data;
+        // Populate tool select
+        modelToolSelect.innerHTML = "";
+        for (const tool of Object.keys(data.tools)) {
+            const opt = document.createElement("option");
+            opt.value = tool;
+            opt.textContent = tool;
+            if (tool === data.current_tool) opt.selected = true;
+            modelToolSelect.appendChild(opt);
+        }
+        populateModelOptions(data.current_tool, data.current_model);
+    });
+}
+
+function populateModelOptions(tool, currentModel) {
+    modelModelSelect.innerHTML = "";
+    if (!modelData || !modelData.tools[tool]) return;
+    for (const m of modelData.tools[tool]) {
+        const opt = document.createElement("option");
+        opt.value = m.id;
+        opt.textContent = m.label;
+        if (m.id === currentModel) opt.selected = true;
+        modelModelSelect.appendChild(opt);
+    }
+}
+
+modelToolSelect.addEventListener("change", () => {
+    populateModelOptions(modelToolSelect.value, "");
+});
+
+modelSave.addEventListener("click", async () => {
+    try {
+        const r = await fetch("/api/models", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ai_tool: modelToolSelect.value,
+                ai_model: modelModelSelect.value,
+            }),
+        });
+        const result = await r.json();
+        if (r.ok) {
+            modelMsg.textContent = `Switched to ${result.ai_tool} / ${result.ai_model || "(default)"}`;
+            modelMsg.className = "editor-msg success";
+        }
+    } catch (e) {
+        modelMsg.textContent = "Error: " + e.message;
+        modelMsg.className = "editor-msg error";
+    }
+});
+
+modelClose.addEventListener("click", () => { modelModal.style.display = "none"; });
+modelModal.addEventListener("click", (e) => { if (e.target === modelModal) modelModal.style.display = "none"; });
 
 // ── Bot Management ───────────────────────────────────
 

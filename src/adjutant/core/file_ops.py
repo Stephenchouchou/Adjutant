@@ -68,16 +68,21 @@ def make_diff(original: str, modified: str, filename: str = "file") -> str:
     return "".join(diff)
 
 
-def scan_notebook_structure(root: Path) -> dict[str, Path | None]:
+def scan_notebook_structure(root: Path, paths=None) -> dict[str, Path | None]:
     """Scan notebook root for standard files/dirs.
 
     Returns dict mapping expected items to found paths (or None if missing).
+    ``paths`` is a NotebookPaths instance (from config); uses defaults if None.
     """
+    if paths is None:
+        from adjutant.config import NotebookPaths
+        paths = NotebookPaths()
+
     expected = {
-        "inbox.md": root / "inbox.md",
-        "tasks.md": root / "tasks.md",
-        "journal/daily/": root / "journal" / "daily",
-        "projects/": root / "projects",
+        paths.inbox: root / paths.inbox,
+        paths.tasks: root / paths.tasks,
+        paths.daily_dir + "/": root / paths.daily_dir,
+        paths.projects_dir + "/": root / paths.projects_dir,
     }
     results: dict[str, Path | None] = {}
     for label, path in expected.items():
@@ -91,8 +96,8 @@ def scan_notebook_structure(root: Path) -> dict[str, Path | None]:
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
-def save_attachment(data: bytes, root: Path, ext: str = ".png") -> str:
-    """Save binary attachment to assets/YYYY-MM-DD-HHMMSS{ext}.
+def save_attachment(data: bytes, root: Path, ext: str = ".png", assets_dir: str = "assets") -> str:
+    """Save binary attachment to {assets_dir}/YYYY-MM-DD-HHMMSS{ext}.
 
     Returns the relative path from root.
     """
@@ -104,7 +109,7 @@ def save_attachment(data: bytes, root: Path, ext: str = ".png") -> str:
         )
 
     now = dt.now()
-    rel_dir = Path("assets")
+    rel_dir = Path(assets_dir)
     abs_dir = resolve_safe(root / rel_dir, root)
     abs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -145,12 +150,16 @@ def list_directory(root: Path, rel_path: str = "") -> list[dict]:
     return items
 
 
-def get_notebook_stats(root: Path) -> dict:
+def get_notebook_stats(root: Path, paths=None) -> dict:
     """Gather quick stats about the notebook for the HUD.
 
     Returns counts plus preview lists for the top-bar popups.
     """
     from datetime import datetime as dt
+
+    if paths is None:
+        from adjutant.config import NotebookPaths
+        paths = NotebookPaths()
 
     stats: dict = {
         "inbox_count": 0,
@@ -163,7 +172,7 @@ def get_notebook_stats(root: Path) -> dict:
     }
 
     # Inbox items (unchecked)
-    inbox = root / "inbox.md"
+    inbox = root / paths.inbox
     if inbox.is_file():
         try:
             text = inbox.read_text(encoding="utf-8")
@@ -177,7 +186,7 @@ def get_notebook_stats(root: Path) -> dict:
             pass
 
     # Task count (unchecked)
-    tasks = root / "tasks.md"
+    tasks = root / paths.tasks
     if tasks.is_file():
         try:
             text = tasks.read_text(encoding="utf-8")
@@ -193,7 +202,7 @@ def get_notebook_stats(root: Path) -> dict:
     # Today's daily note — support YYYYMMDD and YYYY-MM-DD formats
     today_compact = dt.now().strftime("%Y%m%d")
     today_dashed = dt.now().strftime("%Y-%m-%d")
-    daily_dir = root / "journal" / "daily"
+    daily_dir = root / paths.daily_dir
     if daily_dir.is_dir():
         try:
             daily_files = sorted(

@@ -18,36 +18,37 @@ from adjutant.core.file_ops import (
 )
 
 
-def handle_text_capture(text: str, notebook_root: Path) -> str:
-    """Append text to inbox.md as a checkbox item.
+def handle_text_capture(text: str, notebook_root: Path, inbox: str = "inbox.md") -> str:
+    """Append text to inbox as a checkbox item.
 
     Returns a confirmation message for the bot to reply with.
     """
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     entry = f"- [ ] {text}  <!-- captured {ts} -->\n"
-    append_to_file(notebook_root / "inbox.md", entry, notebook_root)
+    append_to_file(notebook_root / inbox, entry, notebook_root)
     preview = text[:60] + ("..." if len(text) > 60 else "")
     return f"Captured: {preview}"
 
 
 def handle_image_capture(
-    data: bytes, ext: str, caption: str | None, notebook_root: Path
+    data: bytes, ext: str, caption: str | None, notebook_root: Path,
+    inbox: str = "inbox.md", assets_dir: str = "assets",
 ) -> str:
-    """Save image to assets/ and add inbox entry with link.
+    """Save image to assets dir and add inbox entry with link.
 
     Returns a confirmation message.
     """
-    rel_path = save_attachment(data, notebook_root, ext)
+    rel_path = save_attachment(data, notebook_root, ext, assets_dir=assets_dir)
     ts = datetime.now().strftime("%Y-%m-%d %H:%M")
     desc = caption or "capture"
     entry = f"- [ ] ![{desc}]({rel_path})  <!-- captured {ts} -->\n"
-    append_to_file(notebook_root / "inbox.md", entry, notebook_root)
+    append_to_file(notebook_root / inbox, entry, notebook_root)
     return f"Image saved: {rel_path}"
 
 
-def handle_list_inbox(notebook_root: Path) -> str:
+def handle_list_inbox(notebook_root: Path, paths=None) -> str:
     """Return formatted list of unchecked inbox items."""
-    stats = get_notebook_stats(notebook_root)
+    stats = get_notebook_stats(notebook_root, paths=paths)
     items = stats.get("inbox_items", [])
     if not items:
         return "Inbox is empty."
@@ -60,9 +61,9 @@ def handle_list_inbox(notebook_root: Path) -> str:
     return "\n".join(lines)
 
 
-def handle_list_tasks(notebook_root: Path) -> str:
+def handle_list_tasks(notebook_root: Path, paths=None) -> str:
     """Return formatted list of unchecked tasks."""
-    stats = get_notebook_stats(notebook_root)
+    stats = get_notebook_stats(notebook_root, paths=paths)
     items = stats.get("task_items", [])
     if not items:
         return "No open tasks."
