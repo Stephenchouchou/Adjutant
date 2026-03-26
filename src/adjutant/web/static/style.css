@@ -585,7 +585,7 @@ body {
     align-self: flex-end;
     border-right: 2px solid var(--accent-dim);
     padding-right: 14px;
-    text-align: right;
+    text-align: left;
 }
 
 .msg-header {

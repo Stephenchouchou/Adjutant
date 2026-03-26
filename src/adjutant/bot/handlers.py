@@ -46,6 +46,39 @@ def handle_image_capture(
     return f"Image saved: {rel_path}"
 
 
+def handle_document_capture(
+    data: bytes, filename: str, caption: str | None, notebook_root: Path,
+    inbox: str = "inbox.md", assets_dir: str = "assets",
+) -> str:
+    """Save a document (PDF, etc.) to assets dir and add inbox entry with link.
+
+    Returns a confirmation message.
+    """
+    ext = Path(filename).suffix or ".bin"
+    rel_path = save_attachment(data, notebook_root, ext, assets_dir=assets_dir)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    desc = caption or filename
+    entry = f"- [ ] [{desc}]({rel_path})  <!-- captured {ts} -->\n"
+    append_to_file(notebook_root / inbox, entry, notebook_root)
+    return f"File saved: {rel_path}"
+
+
+def handle_sticker_capture(
+    data: bytes, emoji: str | None, notebook_root: Path,
+    inbox: str = "inbox.md", assets_dir: str = "assets",
+) -> str:
+    """Save a sticker image to assets dir and add inbox entry.
+
+    Returns a confirmation message.
+    """
+    rel_path = save_attachment(data, notebook_root, ".webp", assets_dir=assets_dir)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M")
+    desc = emoji or "sticker"
+    entry = f"- [ ] ![{desc}]({rel_path})  <!-- captured {ts} -->\n"
+    append_to_file(notebook_root / inbox, entry, notebook_root)
+    return f"Sticker saved: {rel_path}"
+
+
 def handle_list_inbox(notebook_root: Path, paths=None) -> str:
     """Return formatted list of unchecked inbox items."""
     stats = get_notebook_stats(notebook_root, paths=paths)
