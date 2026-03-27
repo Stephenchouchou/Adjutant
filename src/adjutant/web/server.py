@@ -69,6 +69,12 @@ class DirectivePayload(PydanticBaseModel):
     body: str
 
 
+class ReminderPayload(PydanticBaseModel):
+    text: str
+    fire_at: str  # ISO8601 or relative time string
+    chat_ids: list[int] | None = None
+
+
 logger = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
@@ -436,6 +442,7 @@ def create_app(
             "bot": {
                 "platform": config.bot.platform,
                 "allowed_chat_ids": config.bot.allowed_chat_ids,
+                "has_token": bool(load_bot_token()),
             },
         }
 
@@ -617,6 +624,104 @@ def create_app(
         path = store.save_sop(key, label, description, files, body)
         return {"ok": True, "path": str(path)}
 
+    # ── Reminders ──────────────────────────────────────────
+
+    from adjutant.core.reminders import ReminderScheduler, ReminderStore
+
+    reminder_store = ReminderStore()
+
+    async def _send_reminder(chat_id: int, text: str) -> None:
+        """Send a reminder via Telegram bot. Raises if bot not available."""
+        if bot_instance and bot_instance.running and bot_instance._app:
+            await bot_instance._app.bot.send_message(chat_id=chat_id, text=text)
+        else:
+            raise RuntimeError("Bot not running")
+
+    reminder_scheduler = ReminderScheduler(reminder_store, send_fn=_send_reminder)
+
+    @app.on_event("startup")
+    async def _start_scheduler():
+        await reminder_scheduler.start()
+        # Auto-start bot if token exists
+        token = load_bot_token()
+        if token:
+            try:
+                from adjutant.bot.telegram import AdjutantTelegramBot
+                nonlocal bot_instance
+                bot_instance = AdjutantTelegramBot(config, token)
+                bot_instance.set_ai_handler(
+                    dispatcher_factory=Dispatcher,
+                    broadcast=broadcast,
+                    ai_tool=config.ai_tool,
+                    ai_model=config.ai_model or None,
+                )
+                bot_instance.set_scheduler(reminder_scheduler)
+                await bot_instance.start_background()
+                await reminder_scheduler.flush_queue()
+                logger.info("Bot auto-started on server launch")
+            except Exception as e:
+                logger.warning("Bot auto-start failed: %s", e)
+                bot_instance = None
+
+    @app.get("/api/reminders")
+    async def list_reminders():
+        pending = reminder_scheduler.list_pending()
+        return {
+            "reminders": [
+                {
+                    "id": r.id,
+                    "text": r.text,
+                    "fire_at": r.fire_at.isoformat(),
+                    "chat_ids": r.chat_ids,
+                    "source": r.source,
+                    "fired": r.fired,
+                    "created_at": r.created_at.isoformat(),
+                }
+                for r in sorted(pending, key=lambda x: x.fire_at)
+            ],
+        }
+
+    @app.post("/api/reminders")
+    async def create_reminder(payload: ReminderPayload):
+        from adjutant.bot.handlers import parse_reminder_time
+        from datetime import datetime as dt, timezone as tz
+
+        # Try ISO8601 first, then relative/short format
+        fire_at = None
+        try:
+            fire_at = dt.fromisoformat(payload.fire_at)
+            if fire_at.tzinfo is None:
+                fire_at = fire_at.replace(tzinfo=tz.utc)
+        except ValueError:
+            fire_at = parse_reminder_time(payload.fire_at)
+
+        if not fire_at:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                {"error": f"Cannot parse time: {payload.fire_at}"},
+                status_code=400,
+            )
+
+        chat_ids = payload.chat_ids or config.bot.allowed_chat_ids
+        if not chat_ids:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(
+                {"error": "No chat_ids specified and no allowed_chat_ids configured"},
+                status_code=400,
+            )
+
+        reminder = await reminder_scheduler.add(
+            payload.text, fire_at, chat_ids=chat_ids, source="web",
+        )
+        return {"ok": True, "id": reminder.id, "fire_at": reminder.fire_at.isoformat()}
+
+    @app.delete("/api/reminders/{reminder_id}")
+    async def delete_reminder(reminder_id: str):
+        if reminder_scheduler.cancel(reminder_id):
+            return {"ok": True}
+        from fastapi.responses import JSONResponse
+        return JSONResponse({"error": "Reminder not found"}, status_code=404)
+
     # ── Bot Management ─────────────────────────────────────
 
     bot_instance = None
@@ -673,8 +778,10 @@ def create_app(
             ai_tool=config.ai_tool,
             ai_model=config.ai_model or None,
         )
+        bot_instance.set_scheduler(reminder_scheduler)
         try:
             await bot_instance.start_background()
+            await reminder_scheduler.flush_queue()
         except Exception as e:
             bot_instance = None
             logger.exception("Bot start failed: %s", e)
@@ -694,6 +801,7 @@ def create_app(
     @app.on_event("shutdown")
     async def _shutdown_bot():
         nonlocal bot_instance
+        await reminder_scheduler.stop()
         if bot_instance and bot_instance.running:
             await bot_instance.stop()
             bot_instance = None
@@ -736,6 +844,7 @@ def create_app(
             "sops": sops,
             "ai_tool": config.ai_tool,
             "stats": stats,
+            "session_id": str(session.id),
         }):
             logger.warning("Client gone before init")
             active_connections.pop(conn_id, None)
@@ -791,6 +900,22 @@ def create_app(
                             "data": f"Session not found: {session_id}",
                         })
 
+                elif msg_type == "resume_session":
+                    session_id = data.get("session_id", "")
+                    loaded = Session.load(session_id)
+                    if loaded:
+                        session = loaded
+                        session.name = "web-chat (resumed)"
+                    # Always send back current session state
+                    await _safe_send(websocket, {
+                        "type": "session_resumed",
+                        "id": str(session.id),
+                        "messages": [
+                            {"role": m.role, "content": m.content}
+                            for m in session.messages
+                        ],
+                    })
+
                 elif msg_type == "message":
                     text = data.get("text", "").strip()
                     image_paths = data.get("image_paths", [])
@@ -833,6 +958,7 @@ def create_app(
                     if not connected:
                         break
                     await _safe_send(websocket, {"type": "stream_end"})
+                    session.save()
 
                 elif msg_type == "run_sop":
                     sop_key = data.get("key", "")
@@ -902,6 +1028,7 @@ def create_app(
                             break
                         session.add_message("adjutant", previous_output or "")
                         await _safe_send(websocket, {"type": "stream_end"})
+                        session.save()
                         response = previous_output or ""
                     else:
                         # Single-step execution
@@ -913,6 +1040,7 @@ def create_app(
                         if not connected:
                             break
                         await _safe_send(websocket, {"type": "stream_end"})
+                        session.save()
 
                     # Offer file write with diff preview
                     if sop.output.startswith("file:"):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable, Coroutine
 from typing import Any
 
@@ -27,6 +28,7 @@ from adjutant.bot.handlers import (
     handle_list_tasks,
     handle_sticker_capture,
     handle_text_capture,
+    parse_reminder_time,
 )
 from adjutant.config import AdjutantConfig
 
@@ -51,6 +53,9 @@ class AdjutantTelegramBot:
         self._ai_tool: str = "claude"
         self._ai_model: str | None = None
 
+        # Reminder scheduler (injected via set_scheduler)
+        self._scheduler: Any = None
+
     @property
     def running(self) -> bool:
         return self._running
@@ -70,6 +75,10 @@ class AdjutantTelegramBot:
         self._ai_tool = ai_tool
         self._ai_model = ai_model
         self._session = Session(name="telegram")
+
+    def set_scheduler(self, scheduler) -> None:
+        """Inject the reminder scheduler."""
+        self._scheduler = scheduler
 
     def _check_auth(self, update: Update) -> bool:
         """Check if the chat is authorized. Log ID if allowlist is empty."""
@@ -97,7 +106,10 @@ class AdjutantTelegramBot:
             "Send a photo to save it to assets/.\n\n"
             "Commands:\n"
             "/inbox — List unchecked inbox items\n"
-            "/tasks — List open tasks"
+            "/tasks — List open tasks\n"
+            "/remind <time> <text> — Set a reminder\n"
+            "/reminders — List pending reminders\n"
+            "/cancel <id> — Cancel a reminder"
         )
 
     async def _cmd_inbox(
@@ -115,6 +127,103 @@ class AdjutantTelegramBot:
             return
         reply = handle_list_tasks(self.notebook_root, paths=self.config.paths)
         await update.message.reply_text(reply)
+
+    async def _cmd_remind(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Set a reminder: /remind <time> <text>"""
+        if not self._check_auth(update):
+            return
+        if not self._scheduler:
+            await update.message.reply_text("Reminder system not available.")
+            return
+
+        args = (context.args or [])
+        if len(args) < 2:
+            await update.message.reply_text(
+                "Usage: /remind <time> <text>\n"
+                "Examples:\n"
+                "  /remind 5m check the oven\n"
+                "  /remind 1h30m take a break\n"
+                "  /remind 09:00 morning meeting\n"
+                "  /remind 2026-03-28 14:00 deadline"
+            )
+            return
+
+        # Try parsing first arg as time; if it looks like "YYYY-MM-DD", join with second arg
+        time_str = args[0]
+        text_start = 1
+        if len(args) >= 3 and re.match(r"\d{4}-\d{2}-\d{2}$", args[0]):
+            time_str = f"{args[0]} {args[1]}"
+            text_start = 2
+        elif len(args) >= 3 and re.match(r"\d{1,2}-\d{2}$", args[0]):
+            time_str = f"{args[0]} {args[1]}"
+            text_start = 2
+
+        fire_at = parse_reminder_time(time_str)
+        if not fire_at:
+            await update.message.reply_text(f"Cannot parse time: {time_str}")
+            return
+
+        text = " ".join(args[text_start:])
+        if not text:
+            await update.message.reply_text("Reminder text is required.")
+            return
+
+        chat_id = update.effective_chat.id
+        reminder = await self._scheduler.add(
+            text, fire_at, chat_ids=[chat_id], source="telegram",
+        )
+
+        # Format display time in local timezone
+        local_time = fire_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        await update.message.reply_text(
+            f"\u23f0 Reminder set: {text}\n"
+            f"Time: {local_time}\n"
+            f"ID: {reminder.id}"
+        )
+
+    async def _cmd_reminders(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """List pending reminders: /reminders"""
+        if not self._check_auth(update):
+            return
+        if not self._scheduler:
+            await update.message.reply_text("Reminder system not available.")
+            return
+
+        pending = self._scheduler.list_pending()
+        if not pending:
+            await update.message.reply_text("No pending reminders.")
+            return
+
+        lines = [f"*REMINDERS* ({len(pending)} pending)\n"]
+        for r in sorted(pending, key=lambda x: x.fire_at):
+            local_time = r.fire_at.astimezone().strftime("%m-%d %H:%M")
+            lines.append(f"\u23f0 [{r.id}] {local_time} — {r.text}")
+        await update.message.reply_text("\n".join(lines))
+
+    async def _cmd_cancel_reminder(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """Cancel a reminder: /cancel <id>"""
+        if not self._check_auth(update):
+            return
+        if not self._scheduler:
+            await update.message.reply_text("Reminder system not available.")
+            return
+
+        args = context.args or []
+        if not args:
+            await update.message.reply_text("Usage: /cancel <reminder_id>")
+            return
+
+        reminder_id = args[0]
+        if self._scheduler.cancel(reminder_id):
+            await update.message.reply_text(f"Reminder {reminder_id} cancelled.")
+        else:
+            await update.message.reply_text(f"Reminder {reminder_id} not found.")
 
     async def _on_text(
         self, update: Update, context: ContextTypes.DEFAULT_TYPE
@@ -262,6 +371,9 @@ class AdjutantTelegramBot:
         app.add_handler(CommandHandler("start", self._cmd_start))
         app.add_handler(CommandHandler("inbox", self._cmd_inbox))
         app.add_handler(CommandHandler("tasks", self._cmd_tasks))
+        app.add_handler(CommandHandler("remind", self._cmd_remind))
+        app.add_handler(CommandHandler("reminders", self._cmd_reminders))
+        app.add_handler(CommandHandler("cancel", self._cmd_cancel_reminder))
         app.add_handler(
             MessageHandler(filters.TEXT & ~filters.COMMAND, self._on_text)
         )

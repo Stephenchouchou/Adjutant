@@ -14,6 +14,7 @@ USER_SOP_DIR = CONFIG_DIR / "sop"
 BOT_TOKEN_PATH = CONFIG_DIR / ".bot_token"
 PERSONA_PATH = CONFIG_DIR / "persona.md"
 MEMORY_PATH = CONFIG_DIR / "memory.md"
+REMINDERS_PATH = CONFIG_DIR / "reminders.json"
 
 # CLI tools and their available models
 TOOL_MODELS: dict[str, list[tuple[str, str]]] = {

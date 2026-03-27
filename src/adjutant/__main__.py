@@ -743,32 +743,116 @@ def _repl():
 @click.option("--port", "-p", default=8100, help="Port to listen on")
 @click.option("--host", default="127.0.0.1", help="Host to bind to")
 @click.option("--no-open", is_flag=True, help="Don't auto-open browser")
-def web(port: int, host: str, no_open: bool):
+@click.option("--fg", is_flag=True, help="Run in foreground (default: background daemon)")
+@click.option("--stop", is_flag=True, help="Stop the running web server")
+def web(port: int, host: str, no_open: bool, fg: bool, stop: bool):
     """Launch the web UI."""
-    import logging
-    import threading
+    import signal
+    import subprocess
     import time
     import webbrowser
 
-    import uvicorn
+    from adjutant.config import CONFIG_DIR
 
-    from adjutant.web.server import create_app
+    pid_file = CONFIG_DIR / "web.pid"
+    log_file = CONFIG_DIR / "web.log"
 
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    if stop:
+        if pid_file.is_file():
+            pid = int(pid_file.read_text().strip())
+            try:
+                import os
+                os.kill(pid, signal.SIGTERM)
+                console.print(f"[green]Stopped Adjutant Web (PID {pid})[/green]")
+            except ProcessLookupError:
+                console.print("[dim]Server was not running.[/dim]")
+            pid_file.unlink(missing_ok=True)
+        else:
+            console.print("[dim]No running server found.[/dim]")
+        return
 
-    config = _require_config()
-    app = create_app(config=config, auto_shutdown=True)
+    # Check if already running
+    if pid_file.is_file():
+        import os
+        old_pid = int(pid_file.read_text().strip())
+        try:
+            os.kill(old_pid, 0)  # check if alive
+            console.print(f"[yellow]Already running (PID {old_pid}).[/yellow] Use [bold]adjutant web --stop[/bold] first.")
+            return
+        except ProcessLookupError:
+            pid_file.unlink(missing_ok=True)
 
+    _require_config()
     url = f"http://{host}:{port}"
-    console.print(f"[bold]Adjutant Web UI[/bold] — {url}")
 
-    if not no_open:
-        def _open_browser() -> None:
-            time.sleep(1)
-            webbrowser.open(url)
-        threading.Thread(target=_open_browser, daemon=True).start()
+    if fg:
+        # Foreground mode — write PID file so --stop works, clean up on exit
+        import atexit
+        import logging
+        import os
 
-    uvicorn.run(app, host=host, port=port, ws_ping_interval=None, ws_ping_timeout=None)
+        import uvicorn
+
+        from adjutant.web.server import create_app
+
+        pid_file.write_text(str(os.getpid()))
+        atexit.register(lambda: pid_file.unlink(missing_ok=True))
+
+        logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+        config = _require_config()
+        app = create_app(config=config, auto_shutdown=not no_open)
+        console.print(f"[bold]Adjutant Web UI[/bold] — {url}")
+        if not no_open:
+            import threading
+            def _open_browser() -> None:
+                time.sleep(1)
+                webbrowser.open(url)
+            threading.Thread(target=_open_browser, daemon=True).start()
+        uvicorn.run(app, host=host, port=port, ws_ping_interval=None, ws_ping_timeout=None)
+        return
+
+    # Background mode — spawn detached process (always --no-open; fg writes its own PID file)
+    with open(log_file, "w") as lf:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "adjutant", "web", "--fg", "--no-open",
+             "--port", str(port), "--host", host],
+            stdout=lf,
+            stderr=lf,
+            start_new_session=True,
+        )
+
+    # Wait for the fg process to write its PID and bind the port
+    import urllib.request
+    ready = False
+    for _ in range(30):
+        time.sleep(0.3)
+        # Check child didn't crash
+        if proc.poll() is not None:
+            console.print(f"[red]Server failed to start.[/red] Check {log_file}")
+            return
+        try:
+            urllib.request.urlopen(url, timeout=1)
+            ready = True
+            break
+        except Exception:
+            pass
+
+    if not ready:
+        console.print(f"[yellow]Server slow to start.[/yellow] Check {log_file}")
+
+    # Read PID from file (written by fg process)
+    if pid_file.is_file():
+        pid = pid_file.read_text().strip()
+    else:
+        pid = str(proc.pid)
+        pid_file.write_text(pid)
+
+    console.print(f"[bold]Adjutant Web UI[/bold] — {url}  [dim](PID {pid})[/dim]")
+    console.print(f"[dim]Log: {log_file}[/dim]")
+    console.print(f"Stop with: [bold]adjutant web --stop[/bold]")
+
+    if not no_open and ready:
+        webbrowser.open(url)
 
 
 # ── bot ───────────────────────────────────────────────────────

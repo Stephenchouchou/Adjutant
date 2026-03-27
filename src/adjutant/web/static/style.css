@@ -1903,4 +1903,99 @@ em { color: #90CAF9; font-style: italic; }
     .memory-tab-bar { display: flex; }
     .memory-add-row { flex-direction: column; }
     .search-input-row { flex-direction: column; }
+    .reminder-add-row { flex-direction: column; }
+}
+
+/* ── Reminders ───────────────────────────────────── */
+
+.reminder-add-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+}
+
+.reminder-add-input {
+    flex: 1;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.reminder-add-input:focus {
+    border-color: var(--primary-dim);
+    box-shadow: 0 0 8px var(--primary-ghost);
+}
+
+.reminder-add-input::placeholder { color: var(--text-lo); opacity: 0.4; }
+
+.reminder-add-time {
+    width: 110px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    color: var(--text-hi);
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    padding: 8px 12px;
+    outline: none;
+    transition: border-color 0.2s;
+    text-align: center;
+}
+
+.reminder-add-time:focus {
+    border-color: var(--primary-dim);
+    box-shadow: 0 0 8px var(--primary-ghost);
+}
+
+.reminder-add-time::placeholder { color: var(--text-lo); opacity: 0.4; }
+
+.reminder-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+}
+
+.reminder-item:last-child { border-bottom: none; }
+
+.reminder-item-time {
+    font-family: var(--font-mono);
+    font-size: 0.82em;
+    color: var(--accent);
+    min-width: 100px;
+}
+
+.reminder-item-text {
+    flex: 1;
+    font-family: var(--font-body);
+    font-size: 0.9em;
+    color: var(--text-hi);
+}
+
+.reminder-item-cancel {
+    background: none;
+    border: 1px solid var(--danger);
+    color: var(--danger);
+    font-family: var(--font-display);
+    font-size: 0.65em;
+    padding: 3px 8px;
+    cursor: pointer;
+    letter-spacing: 0.5px;
+    opacity: 0.6;
+    transition: opacity 0.2s;
+}
+
+.reminder-item-cancel:hover { opacity: 1; }
+
+.reminder-empty {
+    text-align: center;
+    color: var(--text-lo);
+    padding: 24px;
+    font-family: var(--font-body);
+    font-size: 0.9em;
 }

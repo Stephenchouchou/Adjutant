@@ -7,7 +7,8 @@ line.py) translate platform-specific events into calls to these handlers.
 
 from __future__ import annotations
 
-from datetime import datetime
+import re
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from adjutant.core.file_ops import (
@@ -92,6 +93,53 @@ def handle_list_inbox(notebook_root: Path, paths=None) -> str:
     if len(items) > 20:
         lines.append(f"\n...and {len(items) - 20} more")
     return "\n".join(lines)
+
+
+def parse_reminder_time(time_str: str) -> datetime | None:
+    """Parse a time string into a UTC datetime.
+
+    Supports:
+    - Relative: "5m", "1h", "30s", "2h30m"
+    - Absolute today: "09:00", "14:30"
+    - Absolute date+time: "2026-03-28 09:00", "03-28 14:30"
+
+    Returns None if parsing fails. All results are UTC.
+    """
+    time_str = time_str.strip()
+    now = datetime.now(timezone.utc)
+
+    # Relative: "5m", "1h", "30s", "2h30m", "1h30"
+    rel_match = re.fullmatch(
+        r"(?:(\d+)h)?(?:(\d+)m(?:in)?)?(?:(\d+)s)?", time_str
+    )
+    if rel_match and any(rel_match.groups()):
+        hours = int(rel_match.group(1) or 0)
+        minutes = int(rel_match.group(2) or 0)
+        seconds = int(rel_match.group(3) or 0)
+        delta = timedelta(hours=hours, minutes=minutes, seconds=seconds)
+        if delta.total_seconds() > 0:
+            return now + delta
+
+    # Absolute date+time: "2026-03-28 09:00"
+    for fmt in ("%Y-%m-%d %H:%M", "%m-%d %H:%M"):
+        try:
+            parsed = datetime.strptime(time_str, fmt)
+            if fmt == "%m-%d %H:%M":
+                parsed = parsed.replace(year=now.year)
+            return parsed.replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+
+    # Absolute time today: "09:00", "14:30"
+    time_match = re.fullmatch(r"(\d{1,2}):(\d{2})", time_str)
+    if time_match:
+        hour, minute = int(time_match.group(1)), int(time_match.group(2))
+        target = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        if target <= now:
+            target += timedelta(days=1)
+        return target
+
+    return None
 
 
 def handle_list_tasks(notebook_root: Path, paths=None) -> str:

@@ -189,6 +189,10 @@ function connect() {
 
     ws.onopen = () => {
         setStatus("ONLINE", "online");
+        const savedSession = localStorage.getItem("adjutant_session_id");
+        if (savedSession) {
+            ws.send(JSON.stringify({ type: "resume_session", session_id: savedSession }));
+        }
     };
 
     ws.onclose = () => {
@@ -211,6 +215,9 @@ function handleMessage(msg) {
         case "init":
             sopList = msg.sops || [];
             updateStats(msg.stats);
+            if (msg.session_id) {
+                localStorage.setItem("adjutant_session_id", msg.session_id);
+            }
             setStatus("READY", "online");
             setAvatar("idle");
             break;
@@ -293,11 +300,24 @@ function handleMessage(msg) {
 
         case "session_loaded":
             feed.innerHTML = "";
+            localStorage.setItem("adjutant_session_id", msg.id);
             addSysMsg(`SESSION RESUMED: ${msg.id}`);
             for (const m of msg.messages) {
                 addMessage(m.role === "user" ? "user" : "adjutant", m.content, null, true);
             }
             addSysMsg("── 繼續對話 ──");
+            break;
+
+        case "session_resumed":
+            localStorage.setItem("adjutant_session_id", msg.id);
+            if (msg.messages && msg.messages.length > 0) {
+                feed.innerHTML = "";
+                for (const m of msg.messages) {
+                    addMessage(m.role === "user" ? "user" : "adjutant", m.content, null, true);
+                }
+                addSysMsg("── session restored ──");
+            }
+            setStatus("READY", "online");
             break;
 
         case "bot_message":
@@ -1501,6 +1521,116 @@ botBtnStop.addEventListener("click", async () => {
 // Poll bot status every 10s
 setInterval(fetchBotStatus, 10000);
 
+// ── Reminders ────────────────────────────────────────
+
+const reminderModal = document.getElementById("modal-reminders");
+const reminderClose = document.getElementById("reminders-close");
+const reminderTextInput = document.getElementById("reminder-text-input");
+const reminderTimeInput = document.getElementById("reminder-time-input");
+const reminderAddBtn = document.getElementById("reminder-add-btn");
+const reminderMsg = document.getElementById("reminder-msg");
+const reminderList = document.getElementById("reminder-list");
+const reminderEmpty = document.getElementById("reminder-empty");
+const statReminders = document.getElementById("stat-reminders");
+const reminderBlock = document.getElementById("stat-reminder-block");
+
+async function fetchReminders() {
+    try {
+        const r = await fetch("/api/reminders");
+        const data = await r.json();
+        const items = data.reminders || [];
+        statReminders.textContent = items.length || "0";
+        statReminders.className = "stat-value" + (items.length > 0 ? " warn" : "");
+        return items;
+    } catch {
+        return [];
+    }
+}
+
+function renderReminders(items) {
+    reminderList.innerHTML = "";
+    if (!items.length) {
+        reminderEmpty.style.display = "";
+        return;
+    }
+    reminderEmpty.style.display = "none";
+    for (const r of items) {
+        const el = document.createElement("div");
+        el.className = "reminder-item";
+        const fireAt = new Date(r.fire_at);
+        const timeStr = fireAt.toLocaleString(undefined, { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+        el.innerHTML = `
+            <span class="reminder-item-time">${timeStr}</span>
+            <span class="reminder-item-text">${escapeHtml(r.text)}</span>
+            <button class="reminder-item-cancel" data-id="${r.id}">CANCEL</button>
+        `;
+        el.querySelector(".reminder-item-cancel").addEventListener("click", async () => {
+            await fetch(`/api/reminders/${r.id}`, { method: "DELETE" });
+            openRemindersModal();
+        });
+        reminderList.appendChild(el);
+    }
+}
+
+async function openRemindersModal() {
+    reminderModal.style.display = "flex";
+    reminderMsg.textContent = "";
+    reminderMsg.className = "editor-msg";
+    const items = await fetchReminders();
+    renderReminders(items);
+}
+
+reminderBlock.addEventListener("click", (e) => {
+    e.stopPropagation();
+    openRemindersModal();
+});
+
+reminderClose.addEventListener("click", () => { reminderModal.style.display = "none"; });
+reminderModal.addEventListener("click", (e) => { if (e.target === reminderModal) reminderModal.style.display = "none"; });
+
+reminderAddBtn.addEventListener("click", async () => {
+    const text = reminderTextInput.value.trim();
+    const time = reminderTimeInput.value.trim();
+    if (!text || !time) {
+        reminderMsg.textContent = "Text and time are required";
+        reminderMsg.className = "editor-msg error";
+        return;
+    }
+    reminderAddBtn.disabled = true;
+    try {
+        const r = await fetch("/api/reminders", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text, fire_at: time }),
+        });
+        const result = await r.json();
+        if (r.ok) {
+            reminderMsg.textContent = "Reminder set";
+            reminderMsg.className = "editor-msg success";
+            reminderTextInput.value = "";
+            reminderTimeInput.value = "";
+            const items = await fetchReminders();
+            renderReminders(items);
+        } else {
+            reminderMsg.textContent = result.error || "Failed";
+            reminderMsg.className = "editor-msg error";
+        }
+    } catch (e) {
+        reminderMsg.textContent = "Error: " + e.message;
+        reminderMsg.className = "editor-msg error";
+    } finally {
+        reminderAddBtn.disabled = false;
+    }
+});
+
+reminderTimeInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") reminderAddBtn.click();
+});
+
+// Poll reminders every 30s
+fetchReminders();
+setInterval(fetchReminders, 30000);
+
 // ── Memory Search & Import ───────────────────────────
 
 const memorySearchInput = document.getElementById("memory-search-input");
@@ -1804,6 +1934,7 @@ const settingsMsg = document.getElementById("settings-msg");
 function openSettings() {
     settingsModal.style.display = "flex";
     settingsMsg.textContent = "";
+    document.getElementById("settings-bot-token").value = "";
     fetch("/api/settings").then(r => r.json()).then(data => {
         document.getElementById("settings-notebook-root").value = data.notebook_root || "";
         document.getElementById("settings-ollama-url").value = data.ollama_base_url || "";
@@ -1813,13 +1944,29 @@ function openSettings() {
         document.getElementById("settings-projects-dir").value = data.paths?.projects_dir || "";
         document.getElementById("settings-assets-dir").value = data.paths?.assets_dir || "";
         document.getElementById("settings-bot-ids").value = (data.bot?.allowed_chat_ids || []).join(", ");
+        document.getElementById("settings-bot-token").placeholder = data.bot?.has_token ? "Token saved (paste new to replace)" : "Paste Telegram bot token";
     });
 }
 
 settingsSave.addEventListener("click", async () => {
     const idsStr = document.getElementById("settings-bot-ids").value.trim();
     const ids = idsStr ? idsStr.split(",").map(s => parseInt(s.trim())).filter(n => !isNaN(n)) : [];
+    const newToken = document.getElementById("settings-bot-token").value.trim();
     try {
+        // Save bot token if provided
+        if (newToken) {
+            const tr = await fetch("/api/bot/setup", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ token: newToken }),
+            });
+            if (!tr.ok) {
+                const err = await tr.json();
+                settingsMsg.textContent = "Token error: " + (err.error || "Failed");
+                settingsMsg.className = "editor-msg error";
+                return;
+            }
+        }
         const r = await fetch("/api/settings", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -1834,8 +1981,10 @@ settingsSave.addEventListener("click", async () => {
             }),
         });
         if (r.ok) {
-            settingsMsg.textContent = "Settings saved";
+            settingsMsg.textContent = newToken ? "Settings & token saved" : "Settings saved";
             settingsMsg.className = "editor-msg success";
+            document.getElementById("settings-bot-token").value = "";
+            if (newToken) await fetchBotStatus();
         }
     } catch (e) {
         settingsMsg.textContent = "Error: " + e.message;
