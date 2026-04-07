@@ -20,10 +20,6 @@ const paletteHint = document.querySelector(".palette-hint");
 // Stats elements
 const statInbox = document.getElementById("stat-inbox");
 const statTasks = document.getElementById("stat-tasks");
-const statDaily = document.getElementById("stat-daily");
-const statNotes = document.getElementById("stat-notes");
-
-const statIndex = document.getElementById("stat-index");
 
 let ws = null;
 let streaming = false;
@@ -49,7 +45,6 @@ function timestamp() {
 
 const popupInbox = document.getElementById("popup-inbox");
 const popupTasks = document.getElementById("popup-tasks");
-const popupDaily = document.getElementById("popup-daily");
 
 let currentStats = null;
 
@@ -63,51 +58,35 @@ function updateStats(stats) {
     statTasks.textContent = stats.task_count;
     statTasks.className = "stat-value" + (stats.task_count > 5 ? " warn" : "");
 
-    statDaily.textContent = stats.has_today_daily ? "DONE" : "NONE";
-    statDaily.className = "stat-value" + (stats.has_today_daily ? " good" : " warn");
-
-    statNotes.textContent = stats.total_notes;
-
-    // Build popup contents
-    buildPopupList(popupInbox, "INBOX", stats.inbox_items, null);
-    buildPopupList(popupTasks, "OPEN TASKS", stats.task_items, null);
-    buildDailyPopup(popupDaily, stats.daily_recent);
+    // Build popup contents — pass source file path so items are clickable
+    buildPopupList(popupInbox, "INBOX", stats.inbox_items, stats.inbox_file);
+    buildPopupList(popupTasks, "OPEN TASKS", stats.task_items, stats.tasks_file);
 }
 
-function buildPopupList(popup, title, items, onClick) {
+function buildPopupList(popup, title, items, filePath) {
     if (!items || items.length === 0) {
         popup.innerHTML = `<div class="stat-popup-header">${title}</div><div class="stat-popup-empty">Empty</div>`;
         return;
     }
     let html = `<div class="stat-popup-header">${title} (${items.length})</div>`;
     for (const item of items.slice(0, 15)) {
-        html += `<div class="stat-popup-item">${escapeHtml(item)}</div>`;
+        html += `<div class="stat-popup-item stat-popup-clickable" data-file="${escapeHtml(filePath || "")}">${escapeHtml(item)}</div>`;
     }
     if (items.length > 15) {
         html += `<div class="stat-popup-empty">+${items.length - 15} more...</div>`;
     }
     popup.innerHTML = html;
-}
 
-function buildDailyPopup(popup, dailies) {
-    if (!dailies || dailies.length === 0) {
-        popup.innerHTML = '<div class="stat-popup-header">DAILY NOTES</div><div class="stat-popup-empty">No daily notes found</div>';
-        return;
-    }
-    let html = '<div class="stat-popup-header">RECENT DAILIES</div>';
-    for (const d of dailies) {
-        html += `<div class="stat-popup-item" data-path="${escapeHtml(d.path)}">${escapeHtml(d.name)}</div>`;
-    }
-    popup.innerHTML = html;
-
-    // Click to open in file viewer
-    popup.querySelectorAll("[data-path]").forEach(el => {
-        el.addEventListener("click", (e) => {
-            e.stopPropagation();
-            closeAllPopups();
-            openFileViewer(el.dataset.path);
+    // Make items clickable — open the source file in viewer
+    if (filePath) {
+        popup.querySelectorAll(".stat-popup-clickable").forEach(el => {
+            el.addEventListener("click", (e) => {
+                e.stopPropagation();
+                closeAllPopups();
+                openFileViewer(el.dataset.file);
+            });
         });
-    });
+    }
 }
 
 // Stat block click to toggle popup
@@ -135,51 +114,24 @@ function refreshStats() {
 
 let indexBuilding = false;
 
-function refreshIndexStatus() {
-    fetch("/api/index/status").then(r => r.json()).then(data => {
-        if (data.built) {
-            statIndex.textContent = data.chunk_count;
-            statIndex.className = "stat-value good";
-            statIndex.title = `${data.file_count} files, ${data.chunk_count} chunks\nLast built: ${data.last_built}\nClick to rebuild`;
-        } else {
-            statIndex.textContent = "NONE";
-            statIndex.className = "stat-value warn";
-            statIndex.title = "Index not built — click to build";
-        }
-    }).catch(() => {
-        statIndex.textContent = "—";
-    });
-}
-
 async function buildIndex() {
     if (indexBuilding) return;
     indexBuilding = true;
-    statIndex.textContent = "BUILD";
-    statIndex.className = "stat-value blink";
     addSysMsg("INDEX BUILD STARTED — scanning notebook...");
     try {
         const r = await fetch("/api/index/build", { method: "POST" });
         const data = await r.json();
         if (r.ok) {
             addSysMsg(`INDEX BUILD COMPLETE — ${data.file_count} files, ${data.chunk_count} chunks`);
-            refreshIndexStatus();
         } else {
             addErrorMsg(`INDEX BUILD FAILED: ${data.error}`);
-            refreshIndexStatus();
         }
     } catch (e) {
         addErrorMsg(`INDEX BUILD ERROR: ${e.message}`);
-        refreshIndexStatus();
     } finally {
         indexBuilding = false;
     }
 }
-
-// INDEX stat block click to build
-document.getElementById("stat-index-block").addEventListener("click", (e) => {
-    e.stopPropagation();
-    if (!indexBuilding) buildIndex();
-});
 
 // ── WebSocket ────────────────────────────────────────
 
@@ -627,6 +579,7 @@ function getPaletteItems(filter) {
         });
     }
 
+    items.push({ type: "action", icon: "📚", label: "Wiki", desc: "Knowledge base — graph view, pages, browse", action: "wiki" });
     items.push({ type: "action", icon: "🔍", label: "Search Notes", desc: "Semantic search across notebook (RAG)", action: "search" });
     items.push({ type: "action", icon: "🧠", label: "Build Index", desc: "Build/rebuild RAG vector index", action: "build-index" });
     items.push({ type: "action", icon: "📂", label: "Browse Files", desc: "Open notebook file browser", action: "browse" });
@@ -676,12 +629,18 @@ function renderPaletteItems(filter) {
         });
         paletteList.appendChild(el);
     });
+
+    // Scroll selected item into view
+    const sel = paletteList.querySelector(".palette-item.selected");
+    if (sel) sel.scrollIntoView({ block: "nearest" });
 }
 
 function executePaletteItem(item) {
     closePalette();
     if (item.type === "sop") {
         runSop(item.key);
+    } else if (item.action === "wiki") {
+        openWikiModal();
     } else if (item.action === "search") {
         openSearchModal();
     } else if (item.action === "build-index") {
@@ -712,20 +671,26 @@ paletteSearch.addEventListener("input", () => {
 });
 
 paletteSearch.addEventListener("keydown", (e) => {
-    const items = getPaletteItems(paletteSearch.value);
-    if (e.key === "ArrowDown") {
-        e.preventDefault();
-        paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
-        renderPaletteItems(paletteSearch.value);
-    } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
-        renderPaletteItems(paletteSearch.value);
-    } else if (e.key === "Enter") {
-        e.preventDefault();
-        if (items[paletteSelectedIdx]) executePaletteItem(items[paletteSelectedIdx]);
-    } else if (e.key === "Escape") {
-        closePalette();
+    // Arrow/Enter/Escape handled by global keydown; stop propagation to prevent double-fire
+    if (["ArrowDown", "ArrowUp", "Enter", "Escape"].includes(e.key)) {
+        e.stopPropagation();
+        // Let the global handler do the work — but we need to handle here too
+        // since stopPropagation prevents global from seeing it
+        const items = getPaletteItems(paletteSearch.value);
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
+            renderPaletteItems(paletteSearch.value);
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
+            renderPaletteItems(paletteSearch.value);
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (items[paletteSelectedIdx]) executePaletteItem(items[paletteSelectedIdx]);
+        } else if (e.key === "Escape") {
+            closePalette();
+        }
     }
 });
 
@@ -784,11 +749,30 @@ function openFileBrowser(path) {
     });
 }
 
+// File editor state
+const fileEditorTextarea = document.getElementById("file-editor-textarea");
+const fileEditBtn = document.getElementById("file-viewer-edit");
+const fileSaveBtn = document.getElementById("file-viewer-save");
+const fileCancelEditBtn = document.getElementById("file-viewer-cancel-edit");
+const fileViewerMsg = document.getElementById("file-viewer-msg");
+let currentFilePath = null;
+let currentFileContent = null;
+let fileEditorMode = false;
+
 function openFileViewer(path) {
     fileViewerModal.style.display = "flex";
     fileViewerTitle.textContent = path.split("/").pop();
     fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
     fileViewerBack.style.display = "";
+    currentFilePath = path;
+    currentFileContent = null;
+    fileEditorMode = false;
+    fileEditorTextarea.style.display = "none";
+    fileViewerBody.style.display = "";
+    fileEditBtn.style.display = "none";
+    fileSaveBtn.style.display = "none";
+    fileCancelEditBtn.style.display = "none";
+    fileViewerMsg.textContent = "";
 
     // Push current browse state so back works
     const prevPath = fileBrowserHistory.length > 0 ? fileBrowserHistory[fileBrowserHistory.length - 1] : "";
@@ -802,11 +786,75 @@ function openFileViewer(path) {
             fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">${escapeHtml(result.error)}</div>`;
             return;
         }
+        currentFileContent = result.content;
         fileViewerBody.innerHTML = `<div class="file-viewer-content">${renderMarkdown(result.content)}</div>`;
+        // Show edit button for .md files
+        if (path.endsWith(".md")) {
+            fileEditBtn.style.display = "";
+        }
     }).catch(e => {
         fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${escapeHtml(e.message)}</div>`;
     });
 }
+
+fileEditBtn.addEventListener("click", () => {
+    if (!currentFileContent && currentFileContent !== "") return;
+    fileEditorMode = true;
+    fileViewerBody.style.display = "none";
+    fileEditorTextarea.style.display = "";
+    fileEditorTextarea.value = currentFileContent;
+    fileEditBtn.style.display = "none";
+    fileSaveBtn.style.display = "";
+    fileCancelEditBtn.style.display = "";
+    fileEditorTextarea.focus();
+});
+
+fileCancelEditBtn.addEventListener("click", () => {
+    fileEditorMode = false;
+    fileEditorTextarea.style.display = "none";
+    fileViewerBody.style.display = "";
+    fileSaveBtn.style.display = "none";
+    fileCancelEditBtn.style.display = "none";
+    fileEditBtn.style.display = "";
+    fileViewerMsg.textContent = "";
+});
+
+fileSaveBtn.addEventListener("click", async () => {
+    if (!currentFilePath) return;
+    fileSaveBtn.disabled = true;
+    fileSaveBtn.textContent = "SAVING...";
+    fileViewerMsg.textContent = "";
+    try {
+        const r = await fetch("/api/files/write", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: currentFilePath, content: fileEditorTextarea.value }),
+        });
+        const data = await r.json();
+        if (data.ok) {
+            currentFileContent = fileEditorTextarea.value;
+            fileViewerBody.innerHTML = `<div class="file-viewer-content">${renderMarkdown(currentFileContent)}</div>`;
+            fileEditorMode = false;
+            fileEditorTextarea.style.display = "none";
+            fileViewerBody.style.display = "";
+            fileSaveBtn.style.display = "none";
+            fileCancelEditBtn.style.display = "none";
+            fileEditBtn.style.display = "";
+            fileViewerMsg.textContent = "SAVED";
+            fileViewerMsg.className = "editor-msg success";
+            setTimeout(() => { fileViewerMsg.textContent = ""; }, 2000);
+        } else {
+            fileViewerMsg.textContent = data.error || "Save failed";
+            fileViewerMsg.className = "editor-msg error";
+        }
+    } catch (e) {
+        fileViewerMsg.textContent = "Error: " + e.message;
+        fileViewerMsg.className = "editor-msg error";
+    } finally {
+        fileSaveBtn.disabled = false;
+        fileSaveBtn.textContent = "SAVE";
+    }
+});
 
 fileViewerBack.addEventListener("click", () => {
     if (fileBrowserHistory.length > 0) {
@@ -946,9 +994,27 @@ document.addEventListener("keydown", (e) => {
         e.preventDefault();
         if (paletteOverlay.style.display === "none") openPalette();
         else closePalette();
+        return;
     }
-    if (e.key === "Escape") {
-        if (paletteOverlay.style.display !== "none") closePalette();
+    // Palette navigation — handle globally so arrow keys work even if focus drifts
+    if (paletteOverlay.style.display !== "none") {
+        const items = getPaletteItems(paletteSearch.value);
+        if (e.key === "ArrowDown") {
+            e.preventDefault();
+            paletteSelectedIdx = Math.min(paletteSelectedIdx + 1, items.length - 1);
+            renderPaletteItems(paletteSearch.value);
+            paletteSearch.focus();
+        } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            paletteSelectedIdx = Math.max(paletteSelectedIdx - 1, 0);
+            renderPaletteItems(paletteSearch.value);
+            paletteSearch.focus();
+        } else if (e.key === "Enter") {
+            e.preventDefault();
+            if (items[paletteSelectedIdx]) executePaletteItem(items[paletteSelectedIdx]);
+        } else if (e.key === "Escape") {
+            closePalette();
+        }
     }
 });
 
@@ -2009,9 +2075,753 @@ async function loadSessionDetail(sessionId) {
     }
 }
 
+// ── Wiki Knowledge Base ────────────────────────────────
+
+const wikiModal = document.getElementById("modal-wiki");
+const wikiCloseBtn = document.getElementById("wiki-close");
+const wikiInitBtn = document.getElementById("wiki-init-btn");
+const wikiGraphCanvas = document.getElementById("wiki-graph-canvas");
+const wikiGraphEmpty = document.getElementById("wiki-graph-empty");
+const wikiGraphLegend = document.getElementById("wiki-graph-legend");
+const wikiPageList = document.getElementById("wiki-page-list");
+const wikiStatusBar = document.getElementById("wiki-status-bar");
+const wikiPageHeader = document.getElementById("wiki-page-header");
+const wikiPageContent = document.getElementById("wiki-page-content");
+const wikiGraphResetBtn = document.getElementById("wiki-graph-reset");
+const statWikiBlock = document.getElementById("stat-wiki-block");
+
+// Wiki tab switching
+document.querySelectorAll(".wiki-tab").forEach(tab => {
+    tab.addEventListener("click", () => {
+        document.querySelectorAll(".wiki-tab").forEach(t => t.classList.remove("active"));
+        document.querySelectorAll(".wiki-tab-content").forEach(c => c.classList.remove("active"));
+        tab.classList.add("active");
+        document.getElementById("wiki-tab-" + tab.dataset.tab).classList.add("active");
+        if (tab.dataset.tab === "graph") wikiRenderGraph();
+    });
+});
+
+wikiCloseBtn.addEventListener("click", () => { wikiModal.style.display = "none"; });
+wikiModal.addEventListener("click", (e) => { if (e.target === wikiModal) wikiModal.style.display = "none"; });
+
+wikiInitBtn.addEventListener("click", async () => {
+    wikiInitBtn.disabled = true;
+    wikiInitBtn.textContent = "INIT...";
+    try {
+        await fetch("/api/wiki/init", { method: "POST" });
+        openWikiModal();
+    } finally {
+        wikiInitBtn.disabled = false;
+        wikiInitBtn.textContent = "INIT";
+    }
+});
+
+// Wiki stat block click
+statWikiBlock.addEventListener("click", () => openWikiModal());
+
+async function refreshWikiStatus() {
+    try {
+        const r = await fetch("/api/wiki/status");
+        const data = await r.json();
+        const val = document.getElementById("stat-wiki");
+        if (data.exists) {
+            val.textContent = data.page_count;
+        } else {
+            val.textContent = "—";
+        }
+    } catch { }
+}
+
+async function openWikiModal() {
+    wikiModal.style.display = "flex";
+    // Check status
+    const r = await fetch("/api/wiki/status");
+    const status = await r.json();
+    if (!status.exists) {
+        wikiInitBtn.style.display = "";
+        wikiGraphEmpty.style.display = "";
+        wikiGraphEmpty.textContent = "Wiki 尚未初始化。點擊 INIT 開始。";
+        wikiPageList.innerHTML = "";
+        wikiStatusBar.textContent = "";
+        return;
+    }
+    wikiInitBtn.style.display = "none";
+    wikiGraphEmpty.style.display = "none";
+
+    // Load pages
+    const pr = await fetch("/api/wiki/pages");
+    const pagesData = await pr.json();
+    wikiRenderPageList(pagesData.pages || []);
+    wikiStatusBar.textContent = `${(pagesData.pages || []).length} pages`;
+
+    // Render graph
+    wikiRenderGraph();
+    refreshWikiStatus();
+}
+
+function wikiRenderPageList(pages) {
+    wikiPageList.innerHTML = "";
+    if (pages.length === 0) {
+        wikiPageList.innerHTML = '<div style="color:var(--text-lo);text-align:center;padding:24px">No pages yet. Ingest sources with CLI.</div>';
+        return;
+    }
+    const catIcons = { summaries: "📝", entities: "🏷️", concepts: "💡", comparisons: "⚖️", root: "📄" };
+    for (const p of pages) {
+        const cat = p.includes("/") ? p.split("/")[0] : "root";
+        const name = p.split("/").pop().replace(".md", "").replace(/-/g, " ");
+        const el = document.createElement("div");
+        el.className = "wiki-page-item";
+        el.innerHTML = `
+            <span class="wiki-page-item-icon">${catIcons[cat] || "📄"}</span>
+            <span class="wiki-page-item-name">${escapeHtml(name)}</span>
+            <span class="wiki-page-item-cat">${escapeHtml(cat)}</span>
+        `;
+        el.addEventListener("click", () => wikiOpenPage(p));
+        wikiPageList.appendChild(el);
+    }
+}
+
+// ── Force-directed Graph ────────────────────────────
+
+const WIKI_GRAPH_COLORS = {
+    summaries: "#00E5FF",
+    entities: "#FFB000",
+    concepts: "#00FF88",
+    comparisons: "#FF6B6B",
+    root: "#7EB8C9",
+    unknown: "#555",
+};
+
+let wikiGraphData = null;
+let wikiGraphSim = null;
+let wikiGraphTransform = { x: 0, y: 0, scale: 1 };
+let wikiGraphDrag = null;
+let wikiGraphHover = null;
+let wikiGraphSelected = null;
+
+async function wikiRenderGraph() {
+    const canvas = wikiGraphCanvas;
+    const ctx = canvas.getContext("2d");
+    const rect = canvas.parentElement.getBoundingClientRect();
+    canvas.width = rect.width * devicePixelRatio;
+    canvas.height = rect.height * devicePixelRatio;
+    canvas.style.width = rect.width + "px";
+    canvas.style.height = rect.height + "px";
+    ctx.scale(devicePixelRatio, devicePixelRatio);
+
+    // Remove old tooltip if any
+    let tooltip = document.getElementById("wiki-graph-tooltip");
+    if (!tooltip) {
+        tooltip = document.createElement("div");
+        tooltip.id = "wiki-graph-tooltip";
+        tooltip.className = "wiki-graph-tooltip";
+        canvas.parentElement.appendChild(tooltip);
+    }
+    tooltip.style.display = "none";
+
+    // Fetch graph data
+    try {
+        const r = await fetch("/api/wiki/graph");
+        wikiGraphData = await r.json();
+    } catch {
+        wikiGraphEmpty.style.display = "";
+        wikiGraphEmpty.textContent = "Failed to load graph data.";
+        return;
+    }
+
+    const nodes = wikiGraphData.nodes;
+    const links = wikiGraphData.links;
+
+    if (nodes.length === 0) {
+        wikiGraphEmpty.style.display = "";
+        return;
+    }
+    wikiGraphEmpty.style.display = "none";
+
+    // Compute degree (connection count) for each node
+    const degree = {};
+    for (const n of nodes) degree[n.id] = 0;
+    for (const link of links) {
+        degree[link.source] = (degree[link.source] || 0) + 1;
+        degree[link.target] = (degree[link.target] || 0) + 1;
+    }
+    const maxDegree = Math.max(1, ...Object.values(degree));
+
+    // Build adjacency sets for neighbor highlighting
+    const neighbors = {};
+    for (const n of nodes) neighbors[n.id] = new Set();
+    for (const link of links) {
+        neighbors[link.source].add(link.target);
+        neighbors[link.target].add(link.source);
+    }
+
+    // Render legend
+    const cats = [...new Set(nodes.map(n => n.category))];
+    wikiGraphLegend.innerHTML = cats.map(c =>
+        `<span class="wiki-graph-legend-item"><span class="wiki-graph-legend-dot" style="background:${WIKI_GRAPH_COLORS[c] || WIKI_GRAPH_COLORS.unknown}"></span>${c}</span>`
+    ).join("");
+
+    // Initialize positions (circular layout)
+    const W = rect.width, H = rect.height;
+    const cx = W / 2, cy = H / 2;
+    nodes.forEach((n, i) => {
+        const angle = (2 * Math.PI * i) / nodes.length;
+        const radius = Math.min(W, H) * 0.3;
+        n.x = cx + radius * Math.cos(angle);
+        n.y = cy + radius * Math.sin(angle);
+        n.vx = 0;
+        n.vy = 0;
+    });
+
+    // Build node lookup
+    const nodeMap = {};
+    nodes.forEach(n => nodeMap[n.id] = n);
+
+    // Reset transform & selection
+    wikiGraphTransform = { x: 0, y: 0, scale: 1 };
+    wikiGraphSelected = null;
+
+    // Node radius based on degree
+    function nodeRadius(n) {
+        const deg = degree[n.id] || 0;
+        return 4 + (deg / maxDegree) * 10; // 4px min, 14px max
+    }
+
+    // Force simulation
+    function simulate() {
+        const alpha = 0.3;
+        const repulsion = 2500;
+        const attraction = 0.005;
+        const centerPull = 0.01;
+        const damping = 0.85;
+
+        for (let i = 0; i < nodes.length; i++) {
+            for (let j = i + 1; j < nodes.length; j++) {
+                const a = nodes[i], b = nodes[j];
+                let dx = b.x - a.x, dy = b.y - a.y;
+                let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+                let force = repulsion / (dist * dist);
+                let fx = (dx / dist) * force;
+                let fy = (dy / dist) * force;
+                a.vx -= fx * alpha; a.vy -= fy * alpha;
+                b.vx += fx * alpha; b.vy += fy * alpha;
+            }
+        }
+
+        for (const link of links) {
+            const a = nodeMap[link.source], b = nodeMap[link.target];
+            if (!a || !b) continue;
+            let dx = b.x - a.x, dy = b.y - a.y;
+            let dist = Math.sqrt(dx * dx + dy * dy) || 1;
+            let force = (dist - 140) * attraction;
+            let fx = (dx / dist) * force;
+            let fy = (dy / dist) * force;
+            a.vx += fx; a.vy += fy;
+            b.vx -= fx; b.vy -= fy;
+        }
+
+        for (const n of nodes) {
+            n.vx += (cx - n.x) * centerPull;
+            n.vy += (cy - n.y) * centerPull;
+        }
+
+        for (const n of nodes) {
+            if (n === wikiGraphDrag) continue;
+            n.vx *= damping; n.vy *= damping;
+            n.x += n.vx; n.y += n.vy;
+        }
+    }
+
+    function draw() {
+        ctx.clearRect(0, 0, rect.width, rect.height);
+        ctx.save();
+        ctx.translate(wikiGraphTransform.x, wikiGraphTransform.y);
+        ctx.scale(wikiGraphTransform.scale, wikiGraphTransform.scale);
+
+        // Determine focus node (hover takes priority over selected)
+        const focusNode = wikiGraphHover || wikiGraphSelected;
+        const focusNeighbors = focusNode ? neighbors[focusNode.id] : null;
+
+        // Draw links — two passes: dim first, then highlighted on top
+        for (const link of links) {
+            const a = nodeMap[link.source], b = nodeMap[link.target];
+            if (!a || !b) continue;
+
+            let isHighlighted = false;
+            if (focusNode) {
+                isHighlighted = (link.source === focusNode.id || link.target === focusNode.id);
+            }
+
+            if (focusNode && isHighlighted) continue; // draw highlighted links in second pass
+
+            ctx.lineWidth = focusNode ? 0.3 : 0.8;
+            ctx.strokeStyle = focusNode ? "rgba(0, 229, 255, 0.06)" : "rgba(0, 229, 255, 0.25)";
+            ctx.beginPath();
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+            ctx.stroke();
+        }
+
+        // Second pass: highlighted links
+        if (focusNode) {
+            for (const link of links) {
+                const a = nodeMap[link.source], b = nodeMap[link.target];
+                if (!a || !b) continue;
+                if (link.source !== focusNode.id && link.target !== focusNode.id) continue;
+
+                ctx.lineWidth = 1.5;
+                ctx.strokeStyle = "rgba(0, 229, 255, 0.7)";
+                ctx.beginPath();
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+                ctx.stroke();
+            }
+        }
+
+        // Draw nodes
+        for (const n of nodes) {
+            const color = WIKI_GRAPH_COLORS[n.category] || WIKI_GRAPH_COLORS.unknown;
+            const isHover = wikiGraphHover === n;
+            const isSelected = wikiGraphSelected === n;
+            const isFocused = isHover || isSelected;
+            const isNeighbor = focusNode && focusNeighbors && focusNeighbors.has(n.id);
+            const isDimmed = focusNode && !isFocused && !isNeighbor;
+            const r = nodeRadius(n);
+            const drawR = isFocused ? r + 3 : r;
+
+            // Glow for focused/selected
+            if (isFocused) {
+                ctx.shadowColor = color;
+                ctx.shadowBlur = 20;
+            }
+
+            ctx.globalAlpha = isDimmed ? 0.15 : 1;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(n.x, n.y, drawR, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+
+            // Selection ring
+            if (isSelected) {
+                ctx.strokeStyle = "#fff";
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(n.x, n.y, drawR + 3, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+
+            // Label
+            const labelAlpha = isFocused ? 1 : isNeighbor ? 0.8 : isDimmed ? 0.1 : 0.6;
+            ctx.globalAlpha = labelAlpha;
+            ctx.fillStyle = isFocused ? "#fff" : "rgba(224, 247, 250, 0.9)";
+            ctx.font = `${isFocused ? "12" : isNeighbor ? "10" : "9"}px Rajdhani`;
+            ctx.textAlign = "center";
+            ctx.fillText(n.label, n.x, n.y + drawR + 14);
+
+            ctx.globalAlpha = 1;
+        }
+
+        ctx.restore();
+    }
+
+    // Animation loop
+    let animFrame;
+    function tick() {
+        simulate();
+        draw();
+        animFrame = requestAnimationFrame(tick);
+    }
+
+    if (wikiGraphSim) cancelAnimationFrame(wikiGraphSim);
+    wikiGraphSim = null;
+    tick();
+    wikiGraphSim = animFrame;
+
+    // Mouse interactions
+    function getMousePos(e) {
+        const br = canvas.getBoundingClientRect();
+        return {
+            x: (e.clientX - br.left - wikiGraphTransform.x) / wikiGraphTransform.scale,
+            y: (e.clientY - br.top - wikiGraphTransform.y) / wikiGraphTransform.scale,
+        };
+    }
+
+    function findNodeAt(mx, my) {
+        // Check larger nodes first (they're on top visually)
+        const sorted = [...nodes].sort((a, b) => nodeRadius(b) - nodeRadius(a));
+        for (const n of sorted) {
+            const dx = n.x - mx, dy = n.y - my;
+            const r = nodeRadius(n) + 4; // generous hit area
+            if (dx * dx + dy * dy < r * r) return n;
+        }
+        return null;
+    }
+
+    function showTooltip(node, e) {
+        const deg = degree[node.id] || 0;
+        const cat = node.category;
+        const nbs = neighbors[node.id];
+        const nbList = [...nbs].slice(0, 5).map(id => {
+            const n = nodeMap[id];
+            return n ? n.label : id.replace(".md", "");
+        });
+        let html = `<div class="wiki-tooltip-title">${escapeHtml(node.label)}</div>`;
+        html += `<div class="wiki-tooltip-cat">${escapeHtml(cat)} · ${deg} connection${deg !== 1 ? "s" : ""}</div>`;
+        if (nbList.length > 0) {
+            html += `<div class="wiki-tooltip-links">${nbList.map(l => `<span>${escapeHtml(l)}</span>`).join("")}</div>`;
+        }
+        html += `<div class="wiki-tooltip-hint">click to open</div>`;
+        tooltip.innerHTML = html;
+        tooltip.style.display = "";
+
+        const br = canvas.getBoundingClientRect();
+        const tx = e.clientX - br.left + 15;
+        const ty = e.clientY - br.top - 10;
+        tooltip.style.left = tx + "px";
+        tooltip.style.top = ty + "px";
+
+        // Keep tooltip in bounds
+        requestAnimationFrame(() => {
+            const tr = tooltip.getBoundingClientRect();
+            if (tx + tr.width > rect.width - 10) {
+                tooltip.style.left = (tx - tr.width - 30) + "px";
+            }
+            if (ty + tr.height > rect.height - 10) {
+                tooltip.style.top = (ty - tr.height) + "px";
+            }
+        });
+    }
+
+    let dragMoved = false;
+
+    canvas.onmousedown = (e) => {
+        const { x, y } = getMousePos(e);
+        const node = findNodeAt(x, y);
+        dragMoved = false;
+        if (node) {
+            wikiGraphDrag = node;
+            canvas.style.cursor = "grabbing";
+        } else {
+            wikiGraphDrag = null;
+            canvas._panStart = { x: e.clientX - wikiGraphTransform.x, y: e.clientY - wikiGraphTransform.y };
+        }
+    };
+
+    canvas.onmousemove = (e) => {
+        const { x, y } = getMousePos(e);
+        if (wikiGraphDrag) {
+            dragMoved = true;
+            wikiGraphDrag.x = x;
+            wikiGraphDrag.y = y;
+            wikiGraphDrag.vx = 0;
+            wikiGraphDrag.vy = 0;
+        } else if (canvas._panStart) {
+            dragMoved = true;
+            wikiGraphTransform.x = e.clientX - canvas._panStart.x;
+            wikiGraphTransform.y = e.clientY - canvas._panStart.y;
+        } else {
+            const node = findNodeAt(x, y);
+            wikiGraphHover = node;
+            canvas.style.cursor = node ? "pointer" : "grab";
+            if (node) {
+                showTooltip(node, e);
+            } else {
+                tooltip.style.display = "none";
+            }
+        }
+    };
+
+    canvas.onmouseup = (e) => {
+        const wasDrag = wikiGraphDrag;
+        if (wikiGraphDrag) {
+            canvas.style.cursor = "grab";
+            // Single click on node (no drag movement) → open page
+            if (!dragMoved) {
+                wikiGraphSelected = wikiGraphDrag;
+                wikiOpenPage(wikiGraphDrag.id);
+            }
+            wikiGraphDrag = null;
+        } else if (canvas._panStart) {
+            canvas._panStart = null;
+            // Click on empty space → deselect
+            if (!dragMoved) {
+                wikiGraphSelected = null;
+            }
+        }
+    };
+
+    canvas.ondblclick = null; // single click handles navigation now
+
+    canvas.onmouseleave = () => {
+        wikiGraphHover = null;
+        tooltip.style.display = "none";
+    };
+
+    canvas.onwheel = (e) => {
+        e.preventDefault();
+        const br = canvas.getBoundingClientRect();
+        const mx = e.clientX - br.left, my = e.clientY - br.top;
+        const delta = e.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.max(0.2, Math.min(5, wikiGraphTransform.scale * delta));
+        wikiGraphTransform.x = mx - (mx - wikiGraphTransform.x) * (newScale / wikiGraphTransform.scale);
+        wikiGraphTransform.y = my - (my - wikiGraphTransform.y) * (newScale / wikiGraphTransform.scale);
+        wikiGraphTransform.scale = newScale;
+    };
+
+    // Reset button
+    wikiGraphResetBtn.onclick = () => {
+        wikiGraphTransform = { x: 0, y: 0, scale: 1 };
+        wikiGraphSelected = null;
+    };
+
+    // Stop animation when modal closes
+    const obs = new MutationObserver(() => {
+        if (wikiModal.style.display === "none" && wikiGraphSim) {
+            cancelAnimationFrame(wikiGraphSim);
+            wikiGraphSim = null;
+        }
+    });
+    obs.observe(wikiModal, { attributes: true, attributeFilter: ["style"] });
+}
+
+// ── Wiki Ingest / Lint / Page Edit ─────────────────────
+
+const wikiIngestBtn = document.getElementById("wiki-ingest-btn");
+const wikiLintBtn = document.getElementById("wiki-lint-btn");
+const wikiPageEditor = document.getElementById("wiki-page-editor");
+const wikiPageEditActions = document.getElementById("wiki-page-edit-actions");
+const wikiPageSaveBtn = document.getElementById("wiki-page-save");
+const wikiPageCancelEditBtn = document.getElementById("wiki-page-cancel-edit");
+const wikiPageMsg = document.getElementById("wiki-page-msg");
+let currentWikiPagePath = null;
+let currentWikiPageContent = null;
+
+// Ingest: open file browser to select a source file
+wikiIngestBtn.addEventListener("click", () => {
+    wikiModal.style.display = "none";
+    wikiIngestFileBrowser("");
+});
+
+function wikiIngestFileBrowser(path) {
+    const relPath = path || "";
+    fileViewerModal.style.display = "flex";
+    fileViewerTitle.textContent = "SELECT SOURCE TO INGEST";
+    fileViewerBody.style.display = "";
+    fileEditorTextarea.style.display = "none";
+    fileEditBtn.style.display = "none";
+    fileSaveBtn.style.display = "none";
+    fileCancelEditBtn.style.display = "none";
+    fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
+    fileViewerBack.style.display = path ? "" : "none";
+
+    fetch(`/api/files?path=${encodeURIComponent(relPath)}`).then(r => r.json()).then(items => {
+        if (items.error) {
+            fileViewerBody.innerHTML = `<div style="color:var(--danger);padding:20px">${escapeHtml(items.error)}</div>`;
+            return;
+        }
+        fileViewerBody.innerHTML = "";
+        for (const item of items) {
+            const el = document.createElement("div");
+            el.className = "file-item" + (item.type === "dir" ? " dir" : "");
+            el.innerHTML = `
+                <span class="file-item-icon">${item.type === "dir" ? "📁" : "📄"}</span>
+                <span class="file-item-name">${escapeHtml(item.name)}</span>
+            `;
+            el.addEventListener("click", () => {
+                if (item.type === "dir") {
+                    wikiIngestFileBrowser(item.path);
+                } else {
+                    // Selected a file to ingest
+                    fileViewerModal.style.display = "none";
+                    doWikiIngest(item.path);
+                }
+            });
+            fileViewerBody.appendChild(el);
+        }
+    });
+
+    // Override back/close for ingest mode
+    fileViewerBack.onclick = (e) => {
+        e.stopImmediatePropagation();
+        const parts = relPath.split("/");
+        parts.pop();
+        wikiIngestFileBrowser(parts.join("/"));
+    };
+    fileViewerClose.onclick = (e) => {
+        e.stopImmediatePropagation();
+        fileViewerModal.style.display = "none";
+        wikiModal.style.display = "flex";
+        // Restore original handlers
+        fileViewerClose.onclick = null;
+        fileViewerBack.onclick = null;
+    };
+}
+
+async function doWikiIngest(sourcePath) {
+    wikiModal.style.display = "flex";
+    addSysMsg(`Wiki ingest: ${sourcePath}...`);
+    wikiIngestBtn.disabled = true;
+    wikiIngestBtn.textContent = "INGESTING...";
+
+    try {
+        const r = await fetch("/api/wiki/ingest", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ source_path: sourcePath }),
+        });
+        const data = await r.json();
+        if (data.ok !== false) {
+            let msg = `Wiki ingest 完成: ${sourcePath}`;
+            if (data.pages_created && data.pages_created.length > 0) {
+                msg += `\n\n建立 ${data.pages_created.length} 頁: ${data.pages_created.join(", ")}`;
+            }
+            if (data.pages_updated && data.pages_updated.length > 0) {
+                msg += `\n\n更新 ${data.pages_updated.length} 頁: ${data.pages_updated.join(", ")}`;
+            }
+            addSysMsg(msg);
+            // Refresh wiki modal
+            openWikiModal();
+        } else {
+            addErrorMsg(`Wiki ingest 失敗: ${(data.errors || []).join(", ")}`);
+        }
+    } catch (e) {
+        addErrorMsg(`Wiki ingest error: ${e.message}`);
+    } finally {
+        wikiIngestBtn.disabled = false;
+        wikiIngestBtn.textContent = "INGEST";
+    }
+}
+
+// Lint
+wikiLintBtn.addEventListener("click", async () => {
+    wikiModal.style.display = "none";
+    addSysMsg("Running wiki lint...");
+    wikiLintBtn.disabled = true;
+    wikiLintBtn.textContent = "RUNNING...";
+    setAvatar("thinking");
+
+    try {
+        const r = await fetch("/api/wiki/lint", { method: "POST" });
+        const data = await r.json();
+        if (data.report) {
+            addMessage("adjutant", data.report);
+        } else {
+            addErrorMsg("Wiki lint returned no report.");
+        }
+    } catch (e) {
+        addErrorMsg(`Wiki lint error: ${e.message}`);
+    } finally {
+        wikiLintBtn.disabled = false;
+        wikiLintBtn.textContent = "LINT";
+        setAvatar("idle");
+    }
+});
+
+// Wiki page editing
+async function wikiOpenPage(path) {
+    // Switch to page-view tab
+    document.querySelectorAll(".wiki-tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".wiki-tab-content").forEach(c => c.classList.remove("active"));
+    document.querySelector('.wiki-tab[data-tab="page-view"]').classList.add("active");
+    document.getElementById("wiki-tab-page-view").classList.add("active");
+
+    currentWikiPagePath = path;
+    currentWikiPageContent = null;
+    wikiPageEditor.style.display = "none";
+    wikiPageEditActions.style.display = "none";
+    wikiPageMsg.textContent = "";
+
+    const name = path.split("/").pop().replace(".md", "").replace(/-/g, " ");
+    wikiPageHeader.innerHTML = `<span class="wiki-page-header-back" id="wiki-page-back">← PAGES</span> / ${escapeHtml(path)} <button class="action-btn mini" id="wiki-page-edit-btn" style="margin-left:auto">EDIT</button>`;
+    wikiPageContent.innerHTML = '<div style="color:var(--text-lo);text-align:center;padding:40px">Loading...</div>';
+
+    // Wire up back button
+    document.getElementById("wiki-page-back").addEventListener("click", () => {
+        document.querySelector('.wiki-tab[data-tab="pages"]').click();
+    });
+
+    try {
+        const r = await fetch(`/api/wiki/page?path=${encodeURIComponent(path)}`);
+        const data = await r.json();
+        if (data.ok) {
+            currentWikiPageContent = data.content;
+            let html = renderMarkdown(data.content);
+            // Make wiki links clickable
+            html = html.replace(/href="([^"]*\.md)"/g, (match, href) => {
+                return `href="#" onclick="wikiOpenPage('${href.replace(/'/g, "\\'")}');return false;"`;
+            });
+            wikiPageContent.innerHTML = `<div class="file-viewer-content">${html}</div>`;
+
+            // Wire up edit button
+            document.getElementById("wiki-page-edit-btn").addEventListener("click", () => {
+                wikiPageContent.style.display = "none";
+                wikiPageEditor.style.display = "";
+                wikiPageEditActions.style.display = "flex";
+                wikiPageEditor.value = currentWikiPageContent;
+                wikiPageEditor.focus();
+                document.getElementById("wiki-page-edit-btn").style.display = "none";
+            });
+        } else {
+            wikiPageContent.innerHTML = `<div style="color:var(--danger);padding:20px">${escapeHtml(data.error)}</div>`;
+        }
+    } catch (e) {
+        wikiPageContent.innerHTML = `<div style="color:var(--danger);padding:20px">Error: ${escapeHtml(e.message)}</div>`;
+    }
+}
+
+wikiPageCancelEditBtn.addEventListener("click", () => {
+    wikiPageEditor.style.display = "none";
+    wikiPageEditActions.style.display = "none";
+    wikiPageContent.style.display = "";
+    wikiPageMsg.textContent = "";
+    const editBtn = document.getElementById("wiki-page-edit-btn");
+    if (editBtn) editBtn.style.display = "";
+});
+
+wikiPageSaveBtn.addEventListener("click", async () => {
+    if (!currentWikiPagePath) return;
+    wikiPageSaveBtn.disabled = true;
+    wikiPageSaveBtn.textContent = "SAVING...";
+    wikiPageMsg.textContent = "";
+    try {
+        const r = await fetch("/api/wiki/page", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ path: currentWikiPagePath, content: wikiPageEditor.value }),
+        });
+        const data = await r.json();
+        if (data.ok) {
+            currentWikiPageContent = wikiPageEditor.value;
+            let html = renderMarkdown(currentWikiPageContent);
+            html = html.replace(/href="([^"]*\.md)"/g, (match, href) => {
+                return `href="#" onclick="wikiOpenPage('${href.replace(/'/g, "\\'")}');return false;"`;
+            });
+            wikiPageContent.innerHTML = `<div class="file-viewer-content">${html}</div>`;
+            wikiPageEditor.style.display = "none";
+            wikiPageEditActions.style.display = "none";
+            wikiPageContent.style.display = "";
+            wikiPageMsg.textContent = "SAVED";
+            wikiPageMsg.className = "editor-msg success";
+            setTimeout(() => { wikiPageMsg.textContent = ""; }, 2000);
+            const editBtn = document.getElementById("wiki-page-edit-btn");
+            if (editBtn) editBtn.style.display = "";
+        } else {
+            wikiPageMsg.textContent = data.error || "Save failed";
+            wikiPageMsg.className = "editor-msg error";
+        }
+    } catch (e) {
+        wikiPageMsg.textContent = "Error: " + e.message;
+        wikiPageMsg.className = "editor-msg error";
+    } finally {
+        wikiPageSaveBtn.disabled = false;
+        wikiPageSaveBtn.textContent = "SAVE";
+    }
+});
+
 // ── Init ─────────────────────────────────────────────
 
 setAvatar("idle");
 connect();
 fetchBotStatus();
-refreshIndexStatus();
+refreshWikiStatus();

@@ -628,6 +628,23 @@ def _repl():
     console.print("[bold]Adjutant[/bold] — Interactive Mode")
     console.print("Commands: /triage /daily /weekly /tasks /history /quit\n")
 
+    # Pre-load wiki context if available
+    wiki_context = None
+    try:
+        from adjutant.core.wiki import WikiManager
+
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        wiki_mgr = WikiManager(
+            wiki_root, config.notebook_root,
+            Dispatcher(ollama_base_url=config.ollama_base_url),
+            config.ai_tool, config.ai_model or None,
+        )
+        wiki_context = wiki_mgr.get_wiki_context_for_chat()
+        if wiki_context:
+            console.print("[dim]Wiki knowledge base loaded.[/dim]\n")
+    except Exception:
+        pass
+
     # Check for recent sessions to resume
     session = None
     recent = Session.recent_sessions(minutes=30)
@@ -720,7 +737,7 @@ def _repl():
             continue
 
         # Regular chat
-        full_prompt = build_chat_prompt(user_input, session)
+        full_prompt = build_chat_prompt(user_input, session, wiki_context=wiki_context)
         console.print()
         response = _run_async(
             _stream_and_collect(
@@ -734,6 +751,159 @@ def _repl():
     if session.messages:
         session.save()
         console.print(f"[dim]Session saved: {session.id}[/dim]")
+
+
+# ── Wiki commands ─────────────────────────────────────────────
+
+
+@cli.group()
+def wiki():
+    """Manage the LLM Wiki knowledge base."""
+    pass
+
+
+def _get_wiki_manager(config: AdjutantConfig) -> "WikiManager":
+    """Create a WikiManager with current config."""
+    from adjutant.core.wiki import WikiManager
+
+    wiki_root = config.notebook_root / config.paths.wiki_dir
+    dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+    model = config.ai_model or None
+    return WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+
+
+@wiki.command("init")
+def wiki_init():
+    """Initialize the wiki directory structure."""
+    config = _require_config()
+    wm = _get_wiki_manager(config)
+
+    if wm.wiki_exists():
+        console.print("[yellow]Wiki already initialized.[/yellow]")
+        console.print(f"  Location: {wm.wiki_root}")
+        return
+
+    _run_async(wm.init_wiki())
+    console.print(f"[green]Wiki initialized at {wm.wiki_root}[/green]")
+    console.print("  Created: _schema.md, index.md, log.md")
+    console.print("  Directories: summaries/, entities/, concepts/, comparisons/")
+    console.print("\nNext: [bold]adjutant wiki ingest <file>[/bold] to add your first source.")
+
+
+@wiki.command("ingest")
+@click.argument("file_path", type=click.Path(exists=True, path_type=Path))
+def wiki_ingest(file_path: Path):
+    """Ingest a source document into the wiki."""
+    config = _require_config()
+    wm = _get_wiki_manager(config)
+
+    if not wm.wiki_exists():
+        console.print("[red]Wiki not initialized.[/red] Run [bold]adjutant wiki init[/bold] first.")
+        return
+
+    # Resolve path relative to notebook root
+    file_path = file_path.resolve()
+    console.print(f"[bold]Ingesting:[/bold] {file_path.name}")
+    console.print()
+
+    async def _ingest():
+        return await wm.ingest(file_path)
+
+    result = _run_async(_ingest())
+
+    if result.pages_created:
+        console.print(f"[green]Created {len(result.pages_created)} page(s):[/green]")
+        for p in result.pages_created:
+            console.print(f"  + {p}")
+    if result.pages_updated:
+        console.print(f"[cyan]Updated {len(result.pages_updated)} page(s):[/cyan]")
+        for p in result.pages_updated:
+            console.print(f"  ~ {p}")
+    if result.errors:
+        console.print(f"[red]Errors ({len(result.errors)}):[/red]")
+        for e in result.errors:
+            console.print(f"  ! {e}")
+    if not result.pages_created and not result.pages_updated and not result.errors:
+        console.print("[yellow]No pages were created or updated.[/yellow]")
+
+
+@wiki.command("query")
+@click.argument("question", nargs=-1, required=True)
+def wiki_query(question: tuple[str, ...]):
+    """Query the wiki knowledge base."""
+    config = _require_config()
+    wm = _get_wiki_manager(config)
+
+    q = " ".join(question)
+    console.print(f"[bold]Query:[/bold] {q}\n")
+
+    async def _query():
+        return await wm.query(q)
+
+    response = _run_async(_query())
+    console.print(Markdown(response))
+
+
+@wiki.command("lint")
+def wiki_lint():
+    """Run a health check on the wiki."""
+    config = _require_config()
+    wm = _get_wiki_manager(config)
+
+    console.print("[bold]Running wiki lint...[/bold]\n")
+
+    async def _lint():
+        return await wm.lint()
+
+    report = _run_async(_lint())
+    console.print(Markdown(report))
+
+
+@wiki.command("status")
+def wiki_status():
+    """Show wiki status summary."""
+    config = _require_config()
+    wm = _get_wiki_manager(config)
+
+    status = wm.get_status()
+    if not status.exists:
+        console.print("[yellow]Wiki not initialized.[/yellow] Run [bold]adjutant wiki init[/bold]")
+        return
+
+    console.print("[bold]Wiki Status[/bold]")
+    console.print(f"  Location: {wm.wiki_root}")
+    console.print(f"  Total pages: {status.page_count}")
+    if status.categories:
+        for cat, count in sorted(status.categories.items()):
+            console.print(f"    {cat}/: {count}")
+    if status.last_log_entry:
+        console.print(f"  Last activity: {status.last_log_entry}")
+
+
+@wiki.command("pages")
+def wiki_pages():
+    """List all wiki pages."""
+    config = _require_config()
+    wm = _get_wiki_manager(config)
+
+    if not wm.wiki_exists():
+        console.print("[yellow]Wiki not initialized.[/yellow]")
+        return
+
+    pages = wm.list_pages()
+    if not pages:
+        console.print("[dim]No pages yet.[/dim] Run [bold]adjutant wiki ingest <file>[/bold] to add content.")
+        return
+
+    table = Table(title=f"Wiki Pages ({len(pages)})")
+    table.add_column("Path", style="cyan")
+    table.add_column("Category", style="dim")
+
+    for p in pages:
+        cat = p.split("/")[0] if "/" in p else "root"
+        table.add_row(p, cat)
+
+    console.print(table)
 
 
 # ── web ───────────────────────────────────────────────────────

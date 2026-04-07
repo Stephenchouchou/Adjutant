@@ -2,7 +2,7 @@
 <html lang="zh-TW">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
     <title>ADJUTANT CORE — Command Center</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@400;600;700;900&family=JetBrains+Mono:wght@300;400;500&family=Rajdhani:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -30,26 +30,15 @@
                     <span class="stat-label">TASKS</span>
                     <div class="stat-popup" id="popup-tasks"></div>
                 </div>
-                <div class="stat-block" data-stat="daily" title="Today's daily note">
-                    <span class="stat-icon">📋</span>
-                    <span class="stat-value" id="stat-daily">—</span>
-                    <span class="stat-label">DAILY</span>
-                    <div class="stat-popup" id="popup-daily"></div>
-                </div>
-                <div class="stat-block" data-stat="notes" title="Total notes">
-                    <span class="stat-icon">📁</span>
-                    <span class="stat-value" id="stat-notes">—</span>
-                    <span class="stat-label">NOTES</span>
-                </div>
                 <div class="stat-block" id="stat-reminder-block" data-stat="reminders" title="Pending reminders — Click to manage">
                     <span class="stat-icon">⏰</span>
                     <span class="stat-value" id="stat-reminders">—</span>
                     <span class="stat-label">REMIND</span>
                 </div>
-                <div class="stat-block stat-block-index" id="stat-index-block" title="RAG Index — Click to build">
-                    <span class="stat-icon">🧠</span>
-                    <span class="stat-value" id="stat-index">—</span>
-                    <span class="stat-label">INDEX</span>
+                <div class="stat-block" id="stat-wiki-block" title="Wiki Knowledge Base — Click to open">
+                    <span class="stat-icon">📚</span>
+                    <span class="stat-value" id="stat-wiki">—</span>
+                    <span class="stat-label">WIKI</span>
                 </div>
                 <div class="top-bar-sep"></div>
                 <div class="bot-status-block" id="bot-status-block" title="Telegram Bot">
@@ -132,17 +121,22 @@
         </div>
     </div>
 
-    <!-- ═══ FILE VIEWER MODAL ═══ -->
+    <!-- ═══ FILE VIEWER / EDITOR MODAL ═══ -->
     <div id="modal-file-viewer" class="modal-overlay" style="display:none">
         <div class="modal-panel modal-panel-wide">
             <div class="modal-header">
                 <span class="modal-title" id="file-viewer-title">FILE</span>
                 <div class="modal-header-actions">
                     <button class="action-btn mini" id="file-viewer-back" style="display:none">BACK</button>
+                    <button class="action-btn mini" id="file-viewer-edit" style="display:none">EDIT</button>
+                    <button class="action-btn execute mini" id="file-viewer-save" style="display:none">SAVE</button>
+                    <button class="action-btn mini" id="file-viewer-cancel-edit" style="display:none">CANCEL</button>
+                    <span class="editor-msg" id="file-viewer-msg"></span>
                     <button class="action-btn mini" id="file-viewer-close">CLOSE</button>
                 </div>
             </div>
             <div class="modal-body" id="file-viewer-body"></div>
+            <textarea class="file-editor-textarea" id="file-editor-textarea" style="display:none"></textarea>
         </div>
     </div>
 
@@ -444,6 +438,69 @@
                 <div class="editor-msg" id="reminder-msg"></div>
                 <div id="reminder-list"></div>
                 <div class="reminder-empty" id="reminder-empty" style="display:none">No pending reminders.</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ WIKI MODAL ═══ -->
+    <div id="modal-wiki" class="modal-overlay" style="display:none">
+        <div class="modal-panel modal-panel-wiki">
+            <div class="modal-header">
+                <span class="modal-title">WIKI KNOWLEDGE BASE</span>
+                <div class="modal-header-actions">
+                    <div class="wiki-tab-bar">
+                        <button class="wiki-tab active" data-tab="graph">GRAPH</button>
+                        <button class="wiki-tab" data-tab="pages">PAGES</button>
+                        <button class="wiki-tab" data-tab="page-view">VIEW</button>
+                    </div>
+                    <button class="action-btn mini" id="wiki-init-btn" style="display:none" title="Initialize wiki">INIT</button>
+                    <button class="action-btn mini" id="wiki-close">CLOSE</button>
+                </div>
+            </div>
+            <div class="modal-body" style="padding:0;overflow:hidden">
+                <!-- Graph Tab -->
+                <div id="wiki-tab-graph" class="wiki-tab-content active">
+                    <div class="wiki-graph-container">
+                        <canvas id="wiki-graph-canvas"></canvas>
+                        <div class="wiki-graph-legend" id="wiki-graph-legend"></div>
+                        <div class="wiki-graph-controls">
+                            <button class="action-btn mini" id="wiki-graph-reset" title="Reset zoom">FIT</button>
+                        </div>
+                        <div class="wiki-graph-empty" id="wiki-graph-empty" style="display:none">
+                            Wiki 是空的。先 ingest 一些來源文件。
+                        </div>
+                    </div>
+                </div>
+                <!-- Pages Tab -->
+                <div id="wiki-tab-pages" class="wiki-tab-content">
+                    <div style="padding:16px">
+                        <div class="wiki-actions-bar">
+                            <div class="wiki-status-bar" id="wiki-status-bar"></div>
+                            <div class="wiki-actions-btns">
+                                <button class="action-btn mini" id="wiki-ingest-btn" title="Ingest a source file into the wiki">INGEST</button>
+                                <button class="action-btn mini" id="wiki-lint-btn" title="Run wiki health check">LINT</button>
+                            </div>
+                        </div>
+                        <div class="wiki-page-list" id="wiki-page-list"></div>
+                    </div>
+                </div>
+                <!-- Page View Tab -->
+                <div id="wiki-tab-page-view" class="wiki-tab-content">
+                    <div style="padding:16px">
+                        <div class="wiki-page-header" id="wiki-page-header"></div>
+                        <div class="wiki-page-content" id="wiki-page-content">
+                            <div style="color:var(--text-lo);text-align:center;padding:40px">
+                                從 PAGES 或 GRAPH 中選擇一個頁面
+                            </div>
+                        </div>
+                        <textarea class="file-editor-textarea" id="wiki-page-editor" style="display:none"></textarea>
+                        <div class="wiki-page-edit-actions" id="wiki-page-edit-actions" style="display:none">
+                            <span class="editor-msg" id="wiki-page-msg"></span>
+                            <button class="action-btn execute mini" id="wiki-page-save">SAVE</button>
+                            <button class="action-btn mini" id="wiki-page-cancel-edit">CANCEL</button>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>

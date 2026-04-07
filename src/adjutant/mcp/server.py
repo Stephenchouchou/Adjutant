@@ -201,6 +201,85 @@ def run_sop(sop_key: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Tools — Wiki (LLM-maintained knowledge base)
+# ---------------------------------------------------------------------------
+
+
+def _get_wiki_manager():
+    """Get a WikiManager instance (lazy)."""
+    from adjutant.core.dispatcher import Dispatcher
+    from adjutant.core.wiki import WikiManager
+
+    config = _get_config()
+    wiki_root = config.notebook_root / config.paths.wiki_dir
+    dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+    model = config.ai_model or None
+    return WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+
+
+@mcp.tool()
+def wiki_status() -> str:
+    """Get the wiki knowledge base status: page count, categories, last activity."""
+    wm = _get_wiki_manager()
+    status = wm.get_status()
+    if not status.exists:
+        return "Wiki not initialized. Run: adjutant wiki init"
+    return json.dumps(
+        {
+            "exists": status.exists,
+            "page_count": status.page_count,
+            "categories": status.categories,
+            "last_log_entry": status.last_log_entry,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+async def wiki_query(question: str) -> str:
+    """Query the wiki knowledge base with a question. Uses two-pass retrieval: reads index to find pages, then synthesizes an answer."""
+    wm = _get_wiki_manager()
+    return await wm.query(question)
+
+
+@mcp.tool()
+async def wiki_ingest(source_path: str) -> str:
+    """Ingest a source document into the wiki. The LLM reads the source, creates summary/entity/concept pages, and updates the index."""
+    wm = _get_wiki_manager()
+    config = _get_config()
+    path = config.notebook_root / source_path
+    result = await wm.ingest(path)
+    return json.dumps(
+        {
+            "source": result.source_path,
+            "pages_created": result.pages_created,
+            "pages_updated": result.pages_updated,
+            "errors": result.errors,
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
+@mcp.tool()
+def read_wiki_page(path: str) -> str:
+    """Read a wiki page by relative path (e.g. 'entities/python.md', 'summaries/paper-x.md')."""
+    wm = _get_wiki_manager()
+    return wm.read_page(path)
+
+
+@mcp.tool()
+def list_wiki_pages() -> str:
+    """List all pages in the wiki knowledge base."""
+    wm = _get_wiki_manager()
+    pages = wm.list_pages()
+    if not pages:
+        return "No wiki pages. Run: adjutant wiki init && adjutant wiki ingest <file>"
+    return json.dumps(pages, ensure_ascii=False, indent=2)
+
+
+# ---------------------------------------------------------------------------
 # Resources — Notebook files and config
 # ---------------------------------------------------------------------------
 

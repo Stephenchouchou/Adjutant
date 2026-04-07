@@ -303,6 +303,21 @@ def create_app(
             from fastapi.responses import JSONResponse
             return JSONResponse({"error": str(e)}, status_code=400)
 
+    @app.post("/api/files/write")
+    async def write_file_api(payload: dict):
+        from adjutant.core.file_ops import write_file, FileOutsideRootError
+        path = payload.get("path", "")
+        content = payload.get("content", "")
+        if not path:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "path required"}, status_code=400)
+        try:
+            write_file(config.notebook_root / path, content, config.notebook_root)
+            return {"ok": True}
+        except (FileOutsideRootError, OSError) as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
     # ── Persona & Memory ─────────────────────────────────────
 
     @app.get("/api/persona")
@@ -806,6 +821,181 @@ def create_app(
             await bot_instance.stop()
             bot_instance = None
 
+    # ── Wiki API ──────────────────────────────────────────
+
+    @app.get("/api/wiki/status")
+    def wiki_api_status():
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        status = wm.get_status()
+        return {
+            "exists": status.exists,
+            "page_count": status.page_count,
+            "categories": status.categories,
+            "last_log_entry": status.last_log_entry,
+        }
+
+    @app.post("/api/wiki/init")
+    async def wiki_api_init():
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        if wm.wiki_exists():
+            return {"ok": True, "message": "Wiki already initialized"}
+        await wm.init_wiki()
+        return {"ok": True, "message": "Wiki initialized"}
+
+    @app.get("/api/wiki/pages")
+    def wiki_api_pages():
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        return {"pages": wm.list_pages() if wm.wiki_exists() else []}
+
+    @app.get("/api/wiki/page")
+    def wiki_api_read_page(path: str):
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        try:
+            content = wm.read_page(path)
+            return {"ok": True, "content": content}
+        except FileNotFoundError:
+            return {"ok": False, "error": f"Page not found: {path}"}
+
+    @app.post("/api/wiki/ingest")
+    async def wiki_api_ingest(payload: dict):
+        from adjutant.core.wiki import WikiManager
+        source = payload.get("source_path", "")
+        if not source:
+            return {"ok": False, "error": "source_path required"}
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        result = await wm.ingest(config.notebook_root / source)
+        return {
+            "ok": not result.errors,
+            "pages_created": result.pages_created,
+            "pages_updated": result.pages_updated,
+            "errors": result.errors,
+        }
+
+    @app.post("/api/wiki/lint")
+    async def wiki_api_lint():
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        report = await wm.lint()
+        return {"ok": True, "report": report}
+
+    @app.post("/api/wiki/page")
+    async def wiki_api_write_page(payload: dict):
+        from adjutant.core.wiki import WikiManager
+        path = payload.get("path", "")
+        content = payload.get("content", "")
+        if not path:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"error": "path required"}, status_code=400)
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        try:
+            wm.write_page(path, content)
+            return {"ok": True}
+        except Exception as e:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=400)
+
+    @app.get("/api/wiki/index")
+    def wiki_api_index():
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        return {"content": wm.get_index() if wm.wiki_exists() else ""}
+
+    @app.get("/api/wiki/graph")
+    def wiki_api_graph():
+        """Return wiki pages and their cross-reference links for graph visualization."""
+        import re as _re
+        from adjutant.core.wiki import WikiManager
+        wiki_root = config.notebook_root / config.paths.wiki_dir
+        dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
+        model = config.ai_model or None
+        wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+        if not wm.wiki_exists():
+            return {"nodes": [], "links": []}
+
+        pages = wm.list_pages()
+        nodes = []
+        links = []
+        page_set = set(pages)
+
+        # Parse frontmatter type for coloring and find markdown links
+        link_re = _re.compile(r'\[([^\]]*)\]\(([^)]+\.md)\)')
+
+        for p in pages:
+            try:
+                content = wm.read_page(p)
+            except Exception:
+                content = ""
+
+            # Extract type from frontmatter
+            page_type = "unknown"
+            if content.startswith("---"):
+                end = content.find("---", 3)
+                if end != -1:
+                    fm = content[3:end]
+                    for line in fm.splitlines():
+                        if line.strip().startswith("type:"):
+                            page_type = line.split(":", 1)[1].strip()
+                            break
+
+            category = p.split("/")[0] if "/" in p else "root"
+            label = p.split("/")[-1].replace(".md", "").replace("-", " ")
+            nodes.append({
+                "id": p,
+                "label": label,
+                "category": category,
+                "type": page_type,
+            })
+
+            # Find outgoing links
+            for match in link_re.finditer(content):
+                target = match.group(2)
+                # Resolve relative paths like ../entities/foo.md
+                from pathlib import PurePosixPath
+                if target.startswith("../") or target.startswith("./"):
+                    base = PurePosixPath(p).parent
+                    resolved = str((base / target).as_posix())
+                    # Normalize ../../ etc
+                    parts = []
+                    for part in resolved.split("/"):
+                        if part == "..":
+                            if parts:
+                                parts.pop()
+                        elif part != ".":
+                            parts.append(part)
+                    target = "/".join(parts)
+                if target in page_set:
+                    links.append({"source": p, "target": target})
+
+        return {"nodes": nodes, "links": links}
+
     # ── WebSocket chat ────────────────────────────────────
 
     @app.websocket("/ws")
@@ -824,6 +1014,16 @@ def create_app(
         session = Session(name="web-chat")
         dispatcher = Dispatcher(ollama_base_url=config.ollama_base_url)
         model = config.ai_model or None
+
+        # Pre-load wiki context if available
+        wiki_context = None
+        try:
+            from adjutant.core.wiki import WikiManager
+            wiki_root = config.notebook_root / config.paths.wiki_dir
+            wm = WikiManager(wiki_root, config.notebook_root, dispatcher, config.ai_tool, model)
+            wiki_context = wm.get_wiki_context_for_chat()
+        except Exception:
+            pass
 
         # Send init
         store = SOPStore(config.sop_dirs_builtin, config.sop_dirs_user)
@@ -949,7 +1149,7 @@ def create_app(
                                 file_sections
                             )
 
-                    full_prompt = build_chat_prompt(prompt_text, session)
+                    full_prompt = build_chat_prompt(prompt_text, session, wiki_context=wiki_context)
                     session.add_message("user", text)
 
                     await _safe_send(websocket, {"type": "stream_start"})

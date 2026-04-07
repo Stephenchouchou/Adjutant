@@ -4,6 +4,8 @@ Personal AI knowledge management adjutant. Inspired by StarCraft's Adjutant — 
 
 > **Note:** This is an opinionated personal tool, not a product. It's built around a specific workflow (capture → triage → daily summary → weekly review) and assumes you're comfortable with plain-text markdown notebooks. Fork and adapt to your own style.
 
+**[中文說明](#中文說明)** | [English](#core-philosophy)
+
 ## Core Philosophy
 
 **You command, Adjutant supports.**
@@ -12,6 +14,22 @@ Personal AI knowledge management adjutant. Inspired by StarCraft's Adjutant — 
 - **Adjutant** classifies, summarizes, reminds, and connects — but never decides for you.
 
 The system follows a military command model: the commander (you) owns all decisions; the adjutant (AI) processes intelligence and provides actionable briefings.
+
+## Features
+
+| Feature | CLI | Web UI | Telegram | MCP |
+|---------|:---:|:------:|:--------:|:---:|
+| Chat with AI | ✓ | ✓ | ✓ | — |
+| SOP workflows (triage, daily, weekly) | ✓ | ✓ | — | ✓ |
+| Inbox capture | ✓ | ✓ | ✓ | ✓ |
+| Notebook file browser & editor | — | ✓ | — | ✓ |
+| Wiki knowledge base (graph/browse/edit) | ✓ | ✓ | — | ✓ |
+| RAG semantic search | ✓ | ✓ | — | ✓ |
+| Vector memory | ✓ | ✓ | — | ✓ |
+| Reminders | — | ✓ | ✓ | — |
+| Image capture | — | ✓ | ✓ | — |
+| Persona & directives | ✓ | ✓ | — | — |
+| Model switching (Claude/Gemini/Ollama) | ✓ | ✓ | — | — |
 
 ## Notebook Structure
 
@@ -24,6 +42,7 @@ Adjutant works with a plain-text, markdown-based notebook (compatible with Obsid
     journal/daily/        # Daily notes (YYYYMMDD.md)
     projects/             # Project folders with status & context
     notes/                # Atomic notes (knowledge, ideas, references)
+    wiki/                 # LLM-maintained knowledge base (auto-generated)
     assets/               # Images, attachments
 ```
 
@@ -104,29 +123,43 @@ adjutant sop list
 adjutant sop run inbox-triage
 ```
 
-### Web UI
+### Web UI (Command Center)
 
 ```bash
 adjutant web                    # Opens http://127.0.0.1:8100
 adjutant web --port 9000        # Custom port
+adjutant web --daemon           # Run in background
 ```
 
 Features:
-- Command Center interface with real-time notebook stats (inbox count, tasks, daily status, RAG index)
-- Command Palette (`Ctrl+K`) for all operations — SOPs, search, memory, settings, directives
-- Notebook semantic search (🔍 Search Notes)
-- RAG index build/rebuild from Web UI (click 🧠 INDEX or Ctrl+K → Build Index)
-- Vector memory management — add, search, filter by category, delete, import from memory.md
-- Directives manager — view, create, delete trigger-keyword prompt injections
-- Settings panel — configure Ollama URL, notebook paths, bot settings
-- File attachment (📎) — attach notebook files as chat context
-- SOP v2 input parameter prompts — Web UI asks for parameters before running
-- SOP multi-step execution with step progress display
-- SOP file write with diff preview (shows existing file before overwrite)
-- Session resume — click archived session to continue the conversation
-- File browser to view markdown notes
-- Image paste/drop to save screenshots into notebook
-- Model selector with Ollama support
+- **Command Center** — HUD-style interface with real-time stats (inbox, tasks, reminders, wiki)
+- **Command Palette** (`Ctrl+K`) — unified entry point for all operations
+- **Wiki Knowledge Base** — force-directed graph view, page browser, inline editor
+- **Notebook file browser & editor** — browse, read, and edit markdown files in-browser
+- **Semantic search** — RAG-powered notebook search
+- **Reminder system** — set timed reminders, delivered via Web UI and Telegram
+- **Session management** — resume archived conversations
+- **Image paste/drop** — screenshot capture directly into notebook
+- **SOP execution** — v2 input prompts, multi-step progress, file write with diff preview
+- **Memory & directives manager** — vector memory CRUD, trigger-keyword directive editor
+- **Model selector** — switch between AI backends with Ollama model auto-detection
+- **Responsive layout** — adapts to desktop, tablet, and mobile screens
+
+### Wiki Knowledge Base
+
+Adjutant maintains an LLM-powered wiki (inspired by [Karpathy's LLM Wiki pattern](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)) — a persistent knowledge layer where the AI continuously distills your notes into structured pages.
+
+```bash
+adjutant wiki init                          # Initialize wiki structure
+adjutant wiki ingest notes/my-note.md       # Distill a note into wiki pages
+adjutant wiki query "How does X work?"      # Two-pass query over wiki
+adjutant wiki lint                          # Health check (contradictions, orphans)
+adjutant wiki pages                         # List all wiki pages
+```
+
+Three-layer architecture: **Raw notes** (yours, untouched) → **Wiki** (LLM-maintained summaries, entities, concepts, comparisons) → **Schema** (conventions & rules).
+
+Web UI features interactive graph view (nodes sized by connections, hover to highlight neighbors, click to open page), page browser, and inline page editor.
 
 ### Telegram Bot
 
@@ -160,7 +193,7 @@ Chat with your adjutant from your phone. Questions get AI answers; notes get cap
 | `/inbox` | List unchecked inbox items |
 | `/tasks` | List open tasks |
 | *(any text)* | AI-routed: answers questions or captures to inbox |
-| *(photo)* | Save to `assets/`, add image link to inbox |
+| *(photo/sticker/document)* | Save to `assets/`, add link to inbox |
 
 **Tip:** Add `export ADJUTANT_BOT_TOKEN=xxx` to your `~/.zshrc` or `~/.bashrc`, then you can start the bot anytime with just `adjutant bot`.
 
@@ -473,6 +506,11 @@ Add to Cursor's MCP settings (Settings → MCP Servers):
 | `add_memory(content, category?)` | Add a memory to persistent store |
 | `list_sops()` | List available SOP templates |
 | `run_sop(sop_key)` | Build and return a SOP prompt for execution |
+| `wiki_status()` | Wiki initialization and page count |
+| `wiki_query(question)` | Two-pass query over wiki knowledge base |
+| `wiki_ingest(source)` | Ingest a source file into wiki |
+| `read_wiki_page(path)` | Read a wiki page |
+| `list_wiki_pages()` | List all wiki pages |
 
 ### MCP Resources
 
@@ -575,6 +613,7 @@ tasks = "tasks.md"
 daily_dir = "journal/daily"
 projects_dir = "projects"
 assets_dir = "assets"
+wiki_dir = "wiki"
 
 [bot]
 platform = "telegram"
@@ -607,10 +646,11 @@ allowed_chat_ids = []
                        │
 ┌──────────────────────┴───────────────────────────────────┐
 │ Core Engine                                               │
-│  Chat (persona + directives + RAG + memory)              │
+│  Chat (persona + directives + wiki + RAG + memory)       │
 │  SOP v2 (inputs, steps, constraints)                     │
+│  Wiki (ingest, query, lint, graph)                       │
 │  Dispatcher (subprocess + Ollama HTTP)                   │
-│  File Ops  ·  Session  ·  Prompts                        │
+│  File Ops  ·  Session  ·  Prompts  ·  Reminders         │
 └──────────────────────┬───────────────────────────────────┘
                        │
 ┌──────────────────────┴───────────────────────────────────┐
@@ -624,7 +664,7 @@ allowed_chat_ids = []
 ┌──────────────────────┴───────────────────────────────────┐
 │ External                                                  │
 │  AI (claude/gemini/codex CLI · Ollama HTTP)              │
-│  Notebook (markdown files)                                │
+│  Notebook (markdown files + wiki/)                       │
 │  ~/.adjutant/ (config, index, sessions, SOPs, prompts)   │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -644,5 +684,224 @@ allowed_chat_ids = []
 - python-telegram-bot (optional, for Telegram integration)
 
 ## License
+
+MIT
+
+---
+
+# 中文說明
+
+## 概述
+
+**Adjutant** 是一個以 CLI 為核心的個人 AI 副官系統，靈感來自《星海爭霸》中的副官角色。它整合你的 Markdown 筆記本，執行標準化作業流程（收件匣分類、每日摘要、週報、任務追蹤），並透過多個介面提供對話式的知識管理。
+
+> 這是一個「有主見」的個人工具，不是通用產品。它圍繞特定工作流程建構（捕獲 → 分類 → 每日摘要 → 每週回顧），假設你習慣使用純文字 Markdown 筆記。
+
+## 核心理念
+
+**你下令，副官支援。**
+
+- **你** 把零碎想法丟進 `inbox.md`、寫每日記錄、標記任務優先順序。
+- **副官** 分類、摘要、提醒、串連知識 — 但從不替你做決定。
+
+遵循軍事指揮模型：指揮官（你）擁有所有決策權；副官（AI）處理情報並提供可執行的簡報。
+
+## 功能一覽
+
+| 功能 | CLI | Web UI | Telegram | MCP |
+|------|:---:|:------:|:--------:|:---:|
+| AI 對話 | ✓ | ✓ | ✓ | — |
+| SOP 工作流程（分類、日報、週報） | ✓ | ✓ | — | ✓ |
+| 收件匣捕獲 | ✓ | ✓ | ✓ | ✓ |
+| 筆記瀏覽與編輯 | — | ✓ | — | ✓ |
+| Wiki 知識庫（圖譜/瀏覽/編輯） | ✓ | ✓ | — | ✓ |
+| RAG 語意搜尋 | ✓ | ✓ | — | ✓ |
+| 向量記憶 | ✓ | ✓ | — | ✓ |
+| 定時提醒 | — | ✓ | ✓ | — |
+| 圖片捕獲 | — | ✓ | ✓ | — |
+| 人設與觸發指令 | ✓ | ✓ | — | — |
+| 模型切換（Claude/Gemini/Ollama） | ✓ | ✓ | — | — |
+
+## 筆記本結構
+
+Adjutant 使用純文字 Markdown 筆記本（相容 Obsidian、Logseq 或任何編輯器）：
+
+```
+~/YourNotebook/
+    inbox.md              # 收件匣 — 所有東西從這裡開始
+    tasks.md              # 跨天任務追蹤（Next Actions / Waiting / Someday）
+    journal/daily/        # 每日筆記（YYYYMMDD.md）
+    projects/             # 專案資料夾
+    notes/                # 原子筆記（知識、靈感、參考）
+    wiki/                 # LLM 維護的知識庫（自動生成）
+    assets/               # 圖片、附件
+```
+
+## 每日工作流程
+
+1. **捕獲** — 不假思索地記下。用 Telegram bot、Web UI 或直接編輯 `inbox.md`。
+2. **分類** — 執行 `adjutant triage`，把收件匣項目分類到任務、筆記、專案或「以後再說」。
+3. **工作** — 做你的事。在當天的 daily note 記錄觀察。
+4. **摘要** — 執行 `adjutant daily` 產出結構化日報。
+5. **回顧** — 每週執行 `adjutant weekly` 產出週回顧簡報。
+
+## 安裝
+
+```bash
+# 一鍵安裝
+git clone https://github.com/Stephenchouchou/Adjutant.git
+cd Adjutant
+./install.sh
+```
+
+安裝腳本處理所有事：Python 版本檢查、虛擬環境建立、依賴安裝（含 Telegram bot）、初始設定。
+
+```bash
+# 手動安裝
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+adjutant init
+```
+
+需求：Python 3.12+，以及 AI 後端（預設 `claude` CLI，或 Ollama）。
+
+## 使用方式
+
+### CLI 對話
+
+```bash
+adjutant                                          # 互動式 REPL
+adjutant chat "inbox 裡有什麼需要處理的？"           # 單次提問
+adjutant chat --file projects/xxx.md "進度？"       # 附帶檔案上下文
+```
+
+### SOP 指令
+
+```bash
+adjutant triage     # 收件匣分類
+adjutant daily      # 每日報告
+adjutant tasks      # 任務掃描
+adjutant weekly     # 週報
+adjutant sop list   # 列出所有 SOP
+```
+
+### Web UI（指揮中心）
+
+```bash
+adjutant web                    # 開啟 http://127.0.0.1:8100
+adjutant web --daemon           # 背景執行
+```
+
+主要功能：
+- **指揮中心介面** — HUD 風格，即時顯示收件匣、任務、提醒、Wiki 狀態
+- **命令面板**（`Ctrl+K`）— 統一入口，搜尋並執行所有操作
+- **Wiki 知識庫** — force-directed 互動圖譜、頁面瀏覽器、行內編輯
+- **筆記瀏覽與編輯** — 在瀏覽器內瀏覽和編輯 Markdown 檔案
+- **語意搜尋** — RAG 驅動的全筆記本搜尋
+- **提醒系統** — 設定定時提醒，透過 Web UI 和 Telegram 送達
+- **Session 管理** — 恢復歷史對話
+- **截圖貼上** — 直接把圖片丟進筆記本
+- **響應式排版** — 適配桌面、平板、手機螢幕
+
+### Wiki 知識庫
+
+基於 [Karpathy 的 LLM Wiki 模式](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — AI 持續將你的筆記蒸餾成結構化的知識頁面。
+
+```bash
+adjutant wiki init                          # 初始化 wiki 結構
+adjutant wiki ingest notes/my-note.md       # 將筆記消化成 wiki 頁面
+adjutant wiki query "X 怎麼運作的？"          # 兩階段查詢
+adjutant wiki lint                          # 健康檢查（矛盾、孤立頁面、缺少交叉引用）
+```
+
+三層架構：**原始筆記**（你的，不動）→ **Wiki**（LLM 維護的摘要/實體/概念/比較頁）→ **Schema**（慣例與規範）。
+
+Web UI 的圖譜視圖：節點大小反映連結數、hover 高亮鄰居節點、單擊開啟頁面。
+
+### Telegram Bot
+
+從手機和副官對話。提問會得到 AI 回答；筆記會被捕獲到收件匣。
+
+```bash
+adjutant bot    # 啟動 Telegram bot
+```
+
+設定方式：向 [@BotFather](https://t.me/BotFather) 申請 token，設定環境變數 `ADJUTANT_BOT_TOKEN`，也可從 Web UI 頂部列的 BOT 按鈕操作。
+
+### AI 後端
+
+支援多種 AI 後端：
+
+| 後端 | 設定方式 | 需求 |
+|------|---------|------|
+| Claude | `ai_tool = "claude"` | `claude` CLI |
+| Gemini | `ai_tool = "gemini"` | `gemini` CLI |
+| Codex | `ai_tool = "codex"` | `codex` CLI |
+| Ollama（本地） | `ai_tool = "ollama"` | Ollama 服務 + 模型 |
+
+Ollama 設定：
+
+```toml
+# ~/.adjutant/config.toml
+ai_tool = "ollama"
+ai_model = "llama3.1"
+ollama_base_url = "http://localhost:11434"
+```
+
+### MCP Server
+
+透過 [Model Context Protocol](https://modelcontextprotocol.io/) 將 Adjutant 的能力暴露給 AI 編碼工具（Claude Code、Cursor 等）。
+
+```json
+// .mcp.json
+{
+  "mcpServers": {
+    "adjutant": { "command": "adjutant", "args": ["mcp"] }
+  }
+}
+```
+
+提供 15 個 MCP tools（讀寫筆記、收件匣、搜尋、記憶、SOP、Wiki 操作），2 個 resources，4 個 prompts。
+
+## 設定
+
+設定檔：`~/.adjutant/config.toml`
+
+```toml
+notebook_root = "/home/you/YourNotebook"
+ai_tool = "claude"
+ai_model = ""
+ollama_base_url = "http://localhost:11434"
+
+[paths]
+inbox = "inbox.md"
+tasks = "tasks.md"
+daily_dir = "journal/daily"
+wiki_dir = "wiki"
+
+[bot]
+platform = "telegram"
+allowed_chat_ids = []
+```
+
+## 架構
+
+```
+介面層    CLI · Web UI · Telegram · MCP
+            │
+核心引擎    對話（人設 + 指令 + Wiki + RAG + 記憶）
+            SOP v2（輸入參數、多步驟、約束）
+            Wiki（消化、查詢、健檢、圖譜）
+            Dispatcher · 檔案操作 · Session · 提醒
+            │
+情報層      Embeddings（Ollama / sentence-transformers）
+            RAG 索引（LanceDB, Markdown 分塊）
+            向量記憶（LanceDB, 語意檢索）
+            │
+外部        AI 後端 · Markdown 筆記本 · ~/.adjutant/
+```
+
+## 授權
 
 MIT

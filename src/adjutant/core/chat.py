@@ -38,12 +38,14 @@ def build_chat_prompt(
     file_context: str | None = None,
     rag_context: str | None = None,
     memory_context: str | None = None,
+    wiki_context: str | None = None,
 ) -> str:
-    """Build a full prompt including persona, memory, RAG, history, and optional file context.
+    """Build a full prompt including persona, memory, wiki, RAG, history, and optional file context.
 
     Args:
         memory_context: Pre-fetched memory text (from vector store or flat file).
             If None, falls back to loading flat memory.md directly.
+        wiki_context: Pre-fetched wiki index summary (from WikiManager).
     """
     parts: list[str] = [get_persona()]
 
@@ -54,6 +56,10 @@ def build_chat_prompt(
         memory = load_memory()
         if memory:
             parts.append(f"\n## 副官記憶\n\n{memory}\n")
+
+    # Inject wiki knowledge base index
+    if wiki_context:
+        parts.append(f"\n{wiki_context}\n")
 
     # Inject RAG context (semantically relevant notebook chunks)
     if rag_context:

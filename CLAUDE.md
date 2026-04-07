@@ -10,7 +10,8 @@ A CLI-first personal AI assistant that integrates with your note-taking system. 
 - `src/adjutant/config.py` — Configuration, model definitions (TOOL_MODELS), persona/memory/token helpers
 - `src/adjutant/core/dispatcher.py` — AI dispatcher router (delegates to backends)
 - `src/adjutant/core/backends/` — AI backend implementations (subprocess, ollama)
-- `src/adjutant/core/chat.py` — Chat logic: persona + memory + RAG + session history
+- `src/adjutant/core/chat.py` — Chat logic: persona + memory + wiki + RAG + session history
+- `src/adjutant/core/wiki.py` — LLM Wiki: persistent knowledge base (ingest, query, lint)
 - `src/adjutant/core/sop.py` — SOP v1/v2 template loading (inputs, multi-step, search: queries)
 - `src/adjutant/core/memory.py` — Vector memory store (LanceDB, contextual retrieval)
 - `src/adjutant/core/file_ops.py` — Safe file read/write with glob, size limits, diff preview
@@ -18,7 +19,7 @@ A CLI-first personal AI assistant that integrates with your note-taking system. 
 - `src/adjutant/core/index.py` — Notebook vector index (markdown chunking, LanceDB)
 - `src/adjutant/core/retriever.py` — Semantic search over the notebook index
 - `src/adjutant/models/session.py` — Conversation history model
-- `src/adjutant/prompts/` — Extractable prompt templates (persona, directives)
+- `src/adjutant/prompts/` — Extractable prompt templates (persona, directives, wiki_schema, wiki_ingest)
 - `src/adjutant/sop/` — Built-in SOP templates (v2 format)
 - `src/adjutant/mcp/server.py` — MCP Server (stdio transport, tools/resources/prompts)
 - `src/adjutant/bot/handlers.py` — Platform-agnostic bot handlers (inbox capture, list items)
@@ -44,6 +45,11 @@ A CLI-first personal AI assistant that integrates with your note-taking system. 
 - Directives: trigger-keyword prompt injection via `prompts/directives/*.md`
 - Memory: vector store (LanceDB) with contextual retrieval, fallback to flat `~/.adjutant/memory.md`
 - RAG: LanceDB vector index at `~/.adjutant/index/`, semantic search via embeddings
+- Wiki: LLM-maintained knowledge base at `notebook_root/wiki/` (Karpathy's LLM Wiki pattern)
+  - Ingest: source → LLM → summaries/entities/concepts pages + index.md + log.md
+  - Query: two-pass (index.md → pages → synthesized answer)
+  - Lint: health check for contradictions, orphans, missing cross-references
+  - Wiki context auto-injected into chat prompts when available
 - SOP: v1 (simple) and v2 (typed inputs, multi-step, tools, constraints) formats
 - MCP: `adjutant mcp` exposes tools/resources/prompts via stdio for Claude Code/Cursor
 - Model selection: TOOL_MODELS in config.py, persisted in config.toml

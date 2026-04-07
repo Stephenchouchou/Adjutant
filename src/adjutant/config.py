@@ -71,6 +71,7 @@ class NotebookPaths(BaseModel):
     daily_dir: str = Field(default="journal/daily", description="Daily notes directory")
     projects_dir: str = Field(default="projects", description="Projects directory")
     assets_dir: str = Field(default="assets", description="Attachments/images directory")
+    wiki_dir: str = Field(default="wiki", description="LLM Wiki directory")
 
 
 class AdjutantConfig(BaseModel):
@@ -119,6 +120,7 @@ def load_config() -> AdjutantConfig | None:
         daily_dir=paths_data.get("daily_dir", "journal/daily"),
         projects_dir=paths_data.get("projects_dir", "projects"),
         assets_dir=paths_data.get("assets_dir", "assets"),
+        wiki_dir=paths_data.get("wiki_dir", "wiki"),
     )
 
     # Bot config
@@ -160,6 +162,7 @@ def save_config(config: AdjutantConfig) -> None:
         f'daily_dir = "{config.paths.daily_dir}"',
         f'projects_dir = "{config.paths.projects_dir}"',
         f'assets_dir = "{config.paths.assets_dir}"',
+        f'wiki_dir = "{config.paths.wiki_dir}"',
         "",
         "[bot]",
         f'platform = "{config.bot.platform}"',

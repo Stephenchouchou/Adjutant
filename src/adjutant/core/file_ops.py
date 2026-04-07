@@ -164,23 +164,40 @@ def get_notebook_stats(root: Path, paths=None) -> dict:
     stats: dict = {
         "inbox_count": 0,
         "inbox_items": [],
+        "inbox_file": paths.inbox,
         "task_count": 0,
         "task_items": [],
+        "tasks_file": paths.tasks,
         "has_today_daily": False,
         "daily_recent": [],
         "total_notes": 0,
     }
 
-    # Inbox items (unchecked)
+    # Inbox items — support both checkbox (- [ ]) and plain list (- ) formats
+    # Skip header lines before the first `---` separator if present
     inbox = root / paths.inbox
     if inbox.is_file():
         try:
             text = inbox.read_text(encoding="utf-8")
-            for line in text.splitlines():
+            lines = text.splitlines()
+            # Skip past frontmatter/header section (before first ---)
+            past_separator = False
+            for line in lines:
                 stripped = line.strip()
+                if stripped.startswith("---"):
+                    past_separator = True
+                    continue
+                if not past_separator:
+                    continue
                 if stripped.startswith("- [ ]"):
                     label = stripped[5:].strip()
                     stats["inbox_items"].append(label)
+                elif stripped.startswith("- [x]") or stripped.startswith("- [X]"):
+                    continue  # skip checked items
+                elif stripped.startswith("- ") and len(stripped) > 2:
+                    label = stripped[2:].strip()
+                    if label:
+                        stats["inbox_items"].append(label)
             stats["inbox_count"] = len(stats["inbox_items"])
         except Exception:
             pass
