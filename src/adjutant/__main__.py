@@ -1066,6 +1066,46 @@ def bot(platform: str | None):
         sys.exit(1)
 
 
+# ── Proactive Scanner ─────────────────────────────────────────
+
+
+@cli.group()
+def scan():
+    """Proactive scanner — surface stuck tasks / overdue / weekly reminders."""
+    pass
+
+
+@scan.command("now")
+@click.option("--push/--no-push", default=False, help="Push alerts via bot (default: dry-run)")
+def scan_now_cmd(push: bool):
+    """Run the scanner once and print findings."""
+    from adjutant.core.scanner import ProactiveScanner
+
+    config = _require_config()
+
+    async def _run():
+        scanner = ProactiveScanner(
+            config=config,
+            send_fn=None,  # CLI path doesn't push by default
+            get_chat_ids=lambda: list(config.bot.allowed_chat_ids) if push else [],
+        )
+        findings = scanner.collect_findings()
+        if not findings:
+            console.print("[green]✓ No anomalies found.[/green]")
+            return
+        table = Table(title=f"Scanner findings ({len(findings)})")
+        table.add_column("Category", style="cyan")
+        table.add_column("Message", style="white")
+        for f in findings:
+            table.add_row(f.category, f.message)
+        console.print(table)
+        if push:
+            sent = await scanner.scan_once()
+            console.print(f"[yellow]→ {sent} alert(s) pushed via bot[/yellow]")
+
+    _run_async(_run())
+
+
 # ── MCP Server ────────────────────────────────────────────────
 
 

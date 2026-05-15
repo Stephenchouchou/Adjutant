@@ -279,6 +279,31 @@ def list_wiki_pages() -> str:
     return json.dumps(pages, ensure_ascii=False, indent=2)
 
 
+@mcp.tool()
+def scan_findings() -> str:
+    """Run the proactive scanner once and return current findings (stuck tasks, inbox unresolved, weekly reminders, overdue deadlines)."""
+    from adjutant.core.scanner import ProactiveScanner
+
+    config = _get_config()
+    scanner = ProactiveScanner(
+        config=config,
+        send_fn=None,
+        get_chat_ids=lambda: [],
+    )
+    findings = scanner.collect_findings()
+    return json.dumps(
+        {
+            "count": len(findings),
+            "findings": [
+                {"key": f.key, "category": f.category, "message": f.message}
+                for f in findings
+            ],
+        },
+        ensure_ascii=False,
+        indent=2,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Resources — Notebook files and config
 # ---------------------------------------------------------------------------

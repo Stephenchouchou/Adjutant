@@ -642,6 +642,7 @@ def create_app(
     # ── Reminders ──────────────────────────────────────────
 
     from adjutant.core.reminders import ReminderScheduler, ReminderStore
+    from adjutant.core.scanner import ProactiveScanner
 
     reminder_store = ReminderStore()
 
@@ -654,9 +655,17 @@ def create_app(
 
     reminder_scheduler = ReminderScheduler(reminder_store, send_fn=_send_reminder)
 
+    # Proactive scanner — pushes stuck-task/inbox/weekly/overdue alerts
+    proactive_scanner = ProactiveScanner(
+        config=config,
+        send_fn=_send_reminder,
+        get_chat_ids=lambda: list(config.bot.allowed_chat_ids),
+    )
+
     @app.on_event("startup")
     async def _start_scheduler():
         await reminder_scheduler.start()
+        await proactive_scanner.start()
         # Auto-start bot if token exists
         token = load_bot_token()
         if token:
@@ -816,10 +825,31 @@ def create_app(
     @app.on_event("shutdown")
     async def _shutdown_bot():
         nonlocal bot_instance
+        await proactive_scanner.stop()
         await reminder_scheduler.stop()
         if bot_instance and bot_instance.running:
             await bot_instance.stop()
             bot_instance = None
+
+    # ── Proactive Scanner API ──────────────────────────────────
+
+    @app.get("/api/scanner/findings")
+    async def scanner_findings():
+        """Run scanner once (no push) and return current findings."""
+        findings = proactive_scanner.collect_findings()
+        return {
+            "count": len(findings),
+            "findings": [
+                {"key": f.key, "category": f.category, "message": f.message}
+                for f in findings
+            ],
+        }
+
+    @app.post("/api/scanner/run")
+    async def scanner_run_now():
+        """Trigger a scan pass immediately and push alerts."""
+        sent = await proactive_scanner.scan_once()
+        return {"ok": True, "alerts_sent": sent}
 
     # ── Wiki API ──────────────────────────────────────────
 

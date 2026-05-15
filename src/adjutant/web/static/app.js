@@ -710,12 +710,18 @@ const fileViewerClose = document.getElementById("file-viewer-close");
 
 let fileBrowserHistory = [];
 
+let fileBrowserCurrentDir = "";
+
 function openFileBrowser(path) {
     const relPath = path || "";
+    fileBrowserCurrentDir = relPath;
     fileViewerModal.style.display = "flex";
     fileViewerTitle.textContent = relPath || "NOTEBOOK";
     fileViewerBody.innerHTML = '<div style="color:var(--text-lo);padding:20px;text-align:center">Loading...</div>';
     fileViewerBack.style.display = fileBrowserHistory.length > 0 ? "" : "none";
+    // Show NEW only in browser mode (not viewer/editor)
+    const fileNewBtnEl = document.getElementById("file-viewer-new");
+    if (fileNewBtnEl) fileNewBtnEl.style.display = "";
 
     fetch(`/api/files?path=${encodeURIComponent(relPath)}`).then(r => r.json()).then(items => {
         if (items.error) {
@@ -773,6 +779,8 @@ function openFileViewer(path) {
     fileSaveBtn.style.display = "none";
     fileCancelEditBtn.style.display = "none";
     fileViewerMsg.textContent = "";
+    const fileNewBtnEl = document.getElementById("file-viewer-new");
+    if (fileNewBtnEl) fileNewBtnEl.style.display = "none";
 
     // Push current browse state so back works
     const prevPath = fileBrowserHistory.length > 0 ? fileBrowserHistory[fileBrowserHistory.length - 1] : "";
@@ -862,6 +870,40 @@ fileViewerBack.addEventListener("click", () => {
         openFileBrowser(prev);
     }
 });
+
+// ── New File ─────────────────────────────────────────
+const fileNewBtn = document.getElementById("file-viewer-new");
+if (fileNewBtn) {
+    fileNewBtn.addEventListener("click", async () => {
+        const suggested = (fileBrowserCurrentDir ? fileBrowserCurrentDir + "/" : "") + "untitled.md";
+        const relPath = prompt("新檔案路徑（相對 notebook root）：", suggested);
+        if (!relPath || !relPath.trim()) return;
+        const path = relPath.trim();
+        try {
+            const r = await fetch("/api/files/write", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ path, content: "" }),
+            });
+            const data = await r.json();
+            if (!data.ok) {
+                alert("建立失敗：" + (data.error || "unknown"));
+                return;
+            }
+            // Push current dir to history so BACK works
+            fileBrowserHistory.push(fileBrowserCurrentDir);
+            openFileViewer(path);
+            // Auto-enter edit mode after viewer loads
+            setTimeout(() => {
+                if (currentFilePath === path && fileEditBtn.style.display !== "none") {
+                    fileEditBtn.click();
+                }
+            }, 200);
+        } catch (e) {
+            alert("Error: " + e.message);
+        }
+    });
+}
 
 fileViewerClose.addEventListener("click", () => {
     fileViewerModal.style.display = "none";
